@@ -65,11 +65,7 @@ pub struct Slab<'a> {
 }
 
 impl<'a> Slab<'a> {
-    const HEADER_COUNT: usize = mem::size_of::<Slab>().div_ceil(SHARD_SIZE);
-
-    pub fn header_count(&self) -> usize {
-        mem::size_of_val(self).div_ceil(SHARD_SIZE)
-    }
+    pub const HEADER_COUNT: usize = mem::size_of::<Slab>().div_ceil(SHARD_SIZE);
 
     /// # Safety
     ///
@@ -89,7 +85,7 @@ impl<'a> Slab<'a> {
     ///
     /// `this` must points to a valid slab.
     unsafe fn shard_area(this: NonNull<Self>, index: usize) -> NonNull<[u8]> {
-        assert!(index < SHARD_COUNT);
+        debug_assert!(index < SHARD_COUNT);
         let ptr = this.cast::<u8>();
         // SAFETY: `index` is bounded by the assertion.
         let ptr = unsafe { ptr.add(index * SHARD_SIZE) };
@@ -112,11 +108,11 @@ impl<'a> Slab<'a> {
     /// # Safety
     ///
     /// `ptr` must be a pointer within the range of `this`.
-    pub unsafe fn shard_and_block(
+    pub unsafe fn shard_infos(
         this: NonNull<Self>,
         ptr: NonNull<()>,
         _layout: Layout,
-    ) -> (NonNull<Shard<'a>>, BlockRef<'a>) {
+    ) -> (NonNull<Shard<'a>>, BlockRef<'a>, usize) {
         // SAFETY: The same as `shard_meta`.
         let (shard, index) = unsafe { Self::shard_meta(this, ptr) };
 
@@ -134,7 +130,7 @@ impl<'a> Slab<'a> {
             unsafe { NonZeroUsize::new_unchecked(addr.get() + (offset - offset % obj_size)) }
         });
 
-        (shard, unsafe { BlockRef::from_raw(ptr) })
+        (shard, unsafe { BlockRef::from_raw(ptr) }, obj_size)
     }
 
     /// # Safety
@@ -356,7 +352,19 @@ impl<'a> Shard<'a> {
         self.extend_count(limit.min(delta))
     }
 
+    pub fn init_huge(&self, size: usize) {
+        debug_assert!(size > SHARD_SIZE);
+
+        let (slab, _) = self.slab();
+        slab.used.set(slab.used.get() + 1);
+        self.obj_size.store(size, Relaxed);
+        self.cap_limit.set(1);
+        self.extend_count(1);
+    }
+
     pub fn init(&self, obj_size: usize) -> Option<&'a Shard<'a>> {
+        debug_assert!(obj_size <= SHARD_SIZE);
+
         let shard_count = self.shard_count.replace(1) - 1;
         let next_shard = (shard_count > 0).then(|| {
             let (slab, index) = self.slab();

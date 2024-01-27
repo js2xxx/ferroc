@@ -20,10 +20,10 @@ pub use os::mmap::MmapAlloc;
 
 #[cfg(test)]
 mod test {
-    use core::alloc::Allocator;
+    use core::{alloc::Allocator, iter};
 
     use crate::{
-        arena::{slab_layout, Arena},
+        arena::{slab_layout, Arena, SHARD_SIZE, SLAB_SIZE},
         heap::{Context, Heap},
         os::OsAlloc,
         MmapAlloc,
@@ -41,5 +41,18 @@ mod test {
         vec.extend([5, 6, 7, 8]);
         assert_eq!(vec.iter().sum::<i32>(), 10 + 26);
         drop(vec);
+    }
+
+    #[test]
+    fn huge() {
+        let chunk = MmapAlloc.allocate(slab_layout(3)).unwrap();
+        let arena = Arena::new(chunk);
+        let cx = Context::new(&arena);
+        let heap = Heap::new(&cx);
+
+        let mut vec = Vec::new_in(heap.by_ref());
+        vec.extend(iter::repeat(0u8).take(SLAB_SIZE + 5 * SHARD_SIZE));
+        vec[SLAB_SIZE / 2] = 123;
+        drop(vec)
     }
 }

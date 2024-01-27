@@ -6,7 +6,7 @@ use core::{
 };
 
 use crate::{
-    arena::{Arena, SHARD_SIZE},
+    arena::{Arena, SHARD_SIZE, SLAB_SIZE},
     os::OsAlloc,
     slab::{BlockRef, Shard, ShardList, Slab, SlabRef},
 };
@@ -57,8 +57,8 @@ impl<'a, Os: OsAlloc> Context<'a, Os> {
         }
     }
 
-    fn alloc_slab(&self) -> Option<&'a Shard<'a>> {
-        let slab = self.arena.allocate(self.id)?;
+    fn alloc_slab(&self, count: usize, align: usize) -> Option<&'a Shard<'a>> {
+        let slab = self.arena.allocate(self.id, count, align)?;
         Some(slab.into_shard())
     }
 
@@ -93,6 +93,7 @@ pub struct Heap<'a, Os: OsAlloc> {
     cx: &'a Context<'a, Os>,
     shards: [ShardList<'a>; OBJ_SIZE_COUNT],
     full_shards: ShardList<'a>,
+    huge_shards: ShardList<'a>,
 }
 
 impl<'a, Os: OsAlloc> Heap<'a, Os> {
@@ -101,11 +102,27 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
             cx,
             shards: [ShardList::DEFAULT; OBJ_SIZE_COUNT],
             full_shards: ShardList::DEFAULT,
+            huge_shards: ShardList::DEFAULT,
         }
     }
 
+    fn pop_huge(&self, size: usize) -> Option<NonNull<[u8]>> {
+        debug_assert!(size > SHARD_SIZE);
+
+        let count = (Slab::HEADER_COUNT * SHARD_SIZE + size).div_ceil(SLAB_SIZE);
+        let shard = self.cx.alloc_slab(count, SLAB_SIZE)?;
+        shard.init_huge(size);
+        self.huge_shards.push(shard);
+
+        let block = shard.pop_block()?;
+        Some(NonNull::from_raw_parts(block.into_raw(), size))
+    }
+
     fn pop(&self, size: usize) -> Option<NonNull<[u8]>> {
-        let index = obj_size_index(size)?;
+        let index = match obj_size_index(size) {
+            Some(index) => index,
+            None => return self.pop_huge(size),
+        };
 
         let block = if let Some(shard) = self.shards[index].current() {
             shard.pop_block()
@@ -120,16 +137,16 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
     fn pop_contended(&self, index: usize) -> Option<BlockRef<'a>> {
         let list = &self.shards[index];
         if list.is_empty() {
-            let free = (self.cx.free_shards.pop())
+            let free = (self.cx.free_shards.pop()) // 1. Try to pop from the free shards;
                 .or_else(|| {
+                    // 2. Try to collect abandoned shards (only has `free` & `thread_free` blocks);
                     let shard = self.cx.abandoned_shards.iter().find(|shard| {
                         shard.collect(false);
                         shard.is_unused()
                     })?;
                     self.cx.abandoned_shards.remove(shard);
                     Some(shard)
-                })
-                .or_else(|| self.cx.alloc_slab());
+                });
 
             if let Some(free) = free {
                 if let Some(next) = free.init(OBJ_SIZES[index]) {
@@ -137,14 +154,28 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
                 }
                 list.push(free);
             } else {
+                // 3. Try to collect potentially unfull shards.
                 let unfulled = self.full_shards.drain(|shard| {
                     shard.collect(false);
                     !shard.is_full()
                 });
+                let mut has_unfulled = false;
                 unfulled.for_each(|shard| {
-                    let index = obj_size_index(shard.obj_size.load(Relaxed)).unwrap();
-                    self.shards[index].push(shard);
+                    let i = obj_size_index(shard.obj_size.load(Relaxed)).unwrap();
+                    self.shards[i].push(shard);
+                    has_unfulled |= i == index;
                 });
+
+                // 4. Try to clear abandoned huge shards and allocate a new slab.
+                if !has_unfulled {
+                    self.clear_abandoned_huge();
+                    if let Some(free) = self.cx.alloc_slab(1, SLAB_SIZE) {
+                        if let Some(next) = free.init(OBJ_SIZES[index]) {
+                            self.cx.free_shards.push(next);
+                        }
+                        list.push(free);
+                    }
+                }
             }
         };
 
@@ -165,12 +196,18 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
     }
 
     fn pop_aligned(&self, layout: Layout) -> Option<NonNull<[u8]>> {
-        let index = obj_size_index(layout.size())?;
+        'fallback: {
+            let index = match obj_size_index(layout.size()) {
+                Some(index) => index,
+                None if layout.align() <= SHARD_SIZE => return self.pop_huge(layout.size()),
+                None => break 'fallback,
+            };
 
-        if let Some(shard) = self.shards[index].current()
-            && let Some(block) = shard.pop_block_aligned(layout.align())
-        {
-            return Some(NonNull::from_raw_parts(block.into_raw(), layout.size()));
+            if let Some(shard) = self.shards[index].current()
+                && let Some(block) = shard.pop_block_aligned(layout.align())
+            {
+                return Some(NonNull::from_raw_parts(block.into_raw(), layout.size()));
+            }
         }
 
         let ptr = self.pop(layout.size() + layout.align() - 1)?;
@@ -196,22 +233,28 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
         let slab = unsafe { Slab::from_ptr(ptr) };
         let id = unsafe { ptr::addr_of!((*slab.as_ptr()).id).read() };
         // SAFETY: `ptr` is in `slab`.
-        let (shard, block) = unsafe { Slab::shard_and_block(slab, ptr.cast(), layout) };
+        let (shard, block, obj_size) = unsafe { Slab::shard_infos(slab, ptr.cast(), layout) };
         if self.cx.id == id {
             // `id` matches; We're deallocating from the same thread.
             let shard = unsafe { shard.as_ref() };
             let was_full = shard.is_full();
             let is_unused = shard.push_block(block);
 
-            let index = obj_size_index(shard.obj_size.load(Relaxed)).unwrap();
+            if let Some(index) = obj_size_index(obj_size) {
+                if was_full {
+                    self.full_shards.remove(shard);
+                    self.shards[index].push(shard);
+                }
 
-            if was_full {
-                self.full_shards.remove(shard);
-                self.shards[index].push(shard);
-            }
+                if is_unused && self.shards[index].len() > 1 {
+                    self.shards[index].remove(shard);
+                    // `shard` is unused after this calling.
+                    unsafe { self.cx.finalize_shard(shard) }
+                }
+            } else {
+                debug_assert!(is_unused);
 
-            if is_unused && self.shards[index].len() > 1 {
-                self.shards[index].remove(shard);
+                self.huge_shards.remove(shard);
                 // `shard` is unused after this calling.
                 unsafe { self.cx.finalize_shard(shard) }
             }
@@ -221,11 +264,27 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
         }
     }
 
+    fn clear_abandoned_huge(&self) -> bool {
+        let huge = self.huge_shards.drain(|shard| {
+            shard.collect(false);
+            shard.is_unused()
+        });
+        let mut has_unused = false;
+        huge.for_each(|shard| {
+            // `shard` is unused after this calling.
+            unsafe { self.cx.finalize_shard(shard) };
+            has_unused = true
+        });
+        has_unused
+    }
+
     pub fn collect(&self, force: bool) {
         self.cx.collect(force);
 
         let shards = self.shards.iter().flatten();
         shards.for_each(|shard| shard.collect(force));
+
+        self.clear_abandoned_huge();
     }
 }
 
@@ -241,6 +300,7 @@ impl<'a, Os: OsAlloc> Drop for Heap<'a, Os> {
                 self.cx.abandoned_shards.push(shard)
             }
         });
+        self.clear_abandoned_huge();
     }
 }
 
