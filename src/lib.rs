@@ -12,7 +12,7 @@
 
 pub mod arena;
 pub mod heap;
-mod os;
+pub mod os;
 mod slab;
 
 #[cfg(feature = "std")]
@@ -41,6 +41,19 @@ mod test {
         vec.extend([5, 6, 7, 8]);
         assert_eq!(vec.iter().sum::<i32>(), 10 + 26);
         drop(vec);
+    }
+
+    #[test]
+    fn siufeh() {
+        let chunk = MmapAlloc.allocate(slab_layout(3)).unwrap();
+        let arena = Arena::new(chunk);
+        let cx = Context::new(&arena);
+        let heap = Heap::new(&cx);
+
+        let mut vec = Vec::new_in(heap.by_ref());
+        vec.extend(iter::repeat(0u8).take(33667));
+        vec[12345] = 123;
+        drop(vec)
     }
 
     #[test]
