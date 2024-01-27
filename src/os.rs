@@ -1,7 +1,7 @@
 #[cfg(feature = "std")]
 pub mod mmap;
 
-use core::{alloc::Layout, fmt, ptr::NonNull};
+use core::{alloc::Layout, ptr::NonNull};
 
 /// # Safety
 ///
@@ -57,14 +57,5 @@ impl<Os: OsAlloc> Drop for Chunk<Os> {
         // SAFETY: `chunk` points to a valid & owned memory block containing `layout`,
         // previously allocated by this allocator.
         unsafe { Os::deallocate(self) }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ChunkAddr(u32);
-
-impl fmt::Debug for ChunkAddr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ChunkAddr({:#x})", self.0)
     }
 }
