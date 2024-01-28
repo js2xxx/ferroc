@@ -60,6 +60,7 @@ impl<'a> SlabRef<'a> {
 pub struct Slab<'a> {
     pub(super) thread_id: u64,
     pub(super) arena_id: usize,
+    is_huge: bool,
     size: usize,
     used: Cell<usize>,
     shards: [Shard<'a>; SHARD_COUNT],
@@ -98,11 +99,14 @@ impl<'a> Slab<'a> {
     /// `ptr` must be a pointer within the range of `this`.
     unsafe fn shard_meta(this: NonNull<Self>, ptr: NonNull<()>) -> (NonNull<Shard<'a>>, usize) {
         let shards = ptr::addr_of!((*this.as_ptr()).shards);
-        let addr = shards.addr();
-        let index = (ptr.addr().get() - addr) / SHARD_SIZE;
+        let index = if !unsafe { ptr::addr_of!((*this.as_ptr()).is_huge).read() } {
+            (ptr.addr().get() - this.addr().get()) / SHARD_SIZE
+        } else {
+            Self::HEADER_COUNT
+        };
         let shard = shards
             .cast::<Shard<'a>>()
-            .with_addr(addr + index * mem::size_of::<Shard<'a>>());
+            .with_addr(shards.addr() + index * mem::size_of::<Shard<'a>>());
         (unsafe { NonNull::new_unchecked(shard.cast_mut()) }, index)
     }
 
@@ -116,6 +120,7 @@ impl<'a> Slab<'a> {
     ) -> (NonNull<Shard<'a>>, BlockRef<'a>, usize) {
         // SAFETY: The same as `shard_meta`.
         let (shard, index) = unsafe { Self::shard_meta(this, ptr) };
+        debug_assert!(index >= Self::HEADER_COUNT);
 
         // SAFETY: `this` is valid.
         let area = unsafe { Self::shard_area(this, index) };
@@ -142,6 +147,7 @@ impl<'a> Slab<'a> {
         ptr: NonNull<[u8]>,
         thread_id: u64,
         arena_id: usize,
+        is_huge: bool,
         free_is_zero: bool,
     ) -> SlabRef<'a> {
         let slab = ptr.cast::<Self>().as_ptr();
@@ -151,6 +157,7 @@ impl<'a> Slab<'a> {
 
         addr_of_mut!((*slab).thread_id).write(thread_id);
         addr_of_mut!((*slab).arena_id).write(arena_id);
+        addr_of_mut!((*slab).is_huge).write(is_huge);
         addr_of_mut!((*slab).size).write(ptr.len());
         addr_of_mut!((*slab).used).write(Cell::new(0));
 

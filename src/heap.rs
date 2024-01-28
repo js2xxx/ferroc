@@ -57,8 +57,8 @@ impl<'a, Os: OsAlloc> Context<'a, Os> {
         }
     }
 
-    fn alloc_slab(&self, count: NonZeroUsize, align: usize) -> Result<&'a Shard<'a>, Error<Os>> {
-        let slab = self.arena.allocate(self.thread_id, count, align)?;
+    fn alloc_slab(&self, count: NonZeroUsize, align: usize, is_huge: bool) -> Result<&'a Shard<'a>, Error<Os>> {
+        let slab = self.arena.allocate(self.thread_id, count, align, is_huge)?;
         Ok(slab.into_shard())
     }
 
@@ -111,7 +111,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
 
         let count = (Slab::HEADER_COUNT * SHARD_SIZE + size).div_ceil(SLAB_SIZE);
         let count = NonZeroUsize::new(count).unwrap();
-        let shard = self.cx.alloc_slab(count, SLAB_SIZE)?;
+        let shard = self.cx.alloc_slab(count, SLAB_SIZE, true)?;
         shard.init_huge(size);
         self.huge_shards.push(shard);
 
@@ -195,7 +195,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
             // 4. Try to clear abandoned huge shards and allocate a new slab.
             if !has_unfulled {
                 self.clear_abandoned_huge();
-                let free = self.cx.alloc_slab(NonZeroUsize::MIN, SLAB_SIZE)?;
+                let free = self.cx.alloc_slab(NonZeroUsize::MIN, SLAB_SIZE, false)?;
                 if let Some(next) = free.init(OBJ_SIZES[index]) {
                     self.cx.free_shards.push(next);
                 }

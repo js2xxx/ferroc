@@ -1,7 +1,12 @@
 mod bitmap;
 
 use core::{
-    alloc::Layout, mem::{self, MaybeUninit}, num::NonZeroUsize, panic, ptr::{self, NonNull}, sync::atomic::{AtomicPtr, AtomicUsize, Ordering::*}
+    alloc::Layout,
+    mem::{self, MaybeUninit},
+    num::NonZeroUsize,
+    panic,
+    ptr::{self, NonNull},
+    sync::atomic::{AtomicPtr, AtomicUsize, Ordering::*},
 };
 
 use self::bitmap::Bitmap;
@@ -120,11 +125,17 @@ impl<Os: OsAlloc> Arena<Os> {
         ))
     }
 
-    pub fn allocate(&self, thread_id: u64, count: usize, align: usize) -> Option<SlabRef> {
+    fn allocate(
+        &self,
+        thread_id: u64,
+        count: usize,
+        align: usize,
+        is_huge: bool,
+    ) -> Option<SlabRef> {
         debug_assert!(align <= SLAB_SIZE);
         let ptr = self.allocate_slices(count)?;
         // SAFETY: The fresh allocation is aligned to `SLAB_SIZE`.
-        Some(unsafe { Slab::init(ptr, thread_id, self.arena_id, Os::IS_ZEROED) })
+        Some(unsafe { Slab::init(ptr, thread_id, self.arena_id, is_huge, Os::IS_ZEROED) })
     }
 
     /// # Safety
@@ -194,17 +205,18 @@ impl<Os: OsAlloc> Arenas<Os> {
         thread_id: u64,
         count: NonZeroUsize,
         align: usize,
+        is_huge: bool,
     ) -> Result<SlabRef, Error<Os>> {
         let count = count.get().max(self.slab_count.load(Relaxed).isqrt());
         let ret = match self
             .arenas()
-            .find_map(|arena| arena.allocate(thread_id, count, align))
+            .find_map(|arena| arena.allocate(thread_id, count, align, is_huge))
         {
             Some(slab) => slab,
             None => {
                 let arena = self.push_arena(count, Some(align))?;
                 let arena = arena.ok_or(Error::ArenaExhausted)?;
-                arena.allocate(thread_id, count, align).unwrap()
+                arena.allocate(thread_id, count, align, is_huge).unwrap()
             }
         };
         self.slab_count.fetch_add(count, Relaxed);
