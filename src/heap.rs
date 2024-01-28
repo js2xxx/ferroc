@@ -212,24 +212,24 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
     }
 
     fn pop_aligned(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<Os>> {
-        'fallback: {
-            let index = match obj_size_index(layout.size()) {
-                Some(index) => index,
-                None if layout.align() <= SHARD_SIZE => return self.pop_huge(layout.size()),
-                None => break 'fallback,
-            };
-
-            if let Some(shard) = self.shards[index].current()
-                && let Some(block) = shard.pop_block_aligned(layout.align())
+        let ptr = match obj_size_index(layout.size()) {
+            Some(index)
+                if let Some(shard) = self.shards[index].current()
+                    && let Some(block) = shard.pop_block_aligned(layout.align()) =>
             {
-                return Ok(NonNull::from_raw_parts(block.into_raw(), layout.size()));
+                block.into_raw()
             }
-        }
-
-        let ptr = self.pop(layout.size() + layout.align() - 1)?;
-        let ptr = ptr.cast().map_addr(|addr| unsafe {
-            NonZeroUsize::new_unchecked((addr.get() + layout.align() - 1) & !(layout.align() - 1))
-        });
+            None if layout.align() <= SHARD_SIZE => return self.pop_huge(layout.size()),
+            _ if layout.align() < SLAB_SIZE => {
+                let ptr = self.pop(layout.size() + layout.align() - 1)?;
+                ptr.cast().map_addr(|addr| unsafe {
+                    NonZeroUsize::new_unchecked(
+                        (addr.get() + layout.align() - 1) & !(layout.align() - 1),
+                    )
+                })
+            }
+            _ => return self.cx.arena.allocate_direct(layout),
+        };
         Ok(NonNull::from_raw_parts(ptr, layout.size()))
     }
 
@@ -245,6 +245,11 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
     /// `ptr` must point to an owned, valid memory block of `layout`, previously
     /// allocated by a certain instance of `Heap` alive in the scope.
     pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        if layout.align() >= SLAB_SIZE {
+            unsafe { self.cx.arena.deallocate_direct(ptr, layout) };
+            return;
+        }
+
         // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
         let slab = unsafe { Slab::from_ptr(ptr) };
         let thread_id = unsafe { ptr::addr_of!((*slab.as_ptr()).thread_id).read() };

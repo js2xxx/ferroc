@@ -14,6 +14,7 @@ use libfuzzer_sys::{arbitrary::Arbitrary, fuzz_target};
 enum Action {
     Allocate { size: u32, align_shift: u8 },
     Deallocate { index: u8 },
+    Collect { force: bool },
 }
 
 fuzz_target!(|actions: Vec<Action>| {
@@ -26,7 +27,7 @@ fuzz_target!(|actions: Vec<Action>| {
     for action in actions {
         match action {
             Action::Allocate { size, align_shift } => {
-                let align_shift = align_shift % 21;
+                let align_shift = align_shift % 24;
                 let size = size % 262144 + 1;
                 let align = 1 << align_shift;
                 // eprintln!("actual size = {size:#x}, align = {align:#x}");
@@ -47,6 +48,7 @@ fuzz_target!(|actions: Vec<Action>| {
                     unsafe { heap.deallocate(ptr.cast(), layout) };
                 }
             }
+            Action::Collect { force } => heap.collect(force),
         }
     }
 

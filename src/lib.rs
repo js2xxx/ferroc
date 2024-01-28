@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![feature(allocator_api)]
+#![feature(if_let_guard)]
 #![feature(isqrt)]
 #![feature(let_chains)]
 #![feature(non_null_convenience)]
@@ -21,7 +22,10 @@ pub use os::mmap::MmapAlloc;
 
 #[cfg(test)]
 mod test {
-    use core::{alloc::Allocator, iter};
+    use core::{
+        alloc::{Allocator, Layout},
+        iter,
+    };
 
     use crate::{
         arena::{Arenas, SHARD_SIZE, SLAB_SIZE},
@@ -43,18 +47,6 @@ mod test {
     }
 
     #[test]
-    fn siufeh() {
-        let arena = Arenas::new(MmapAlloc);
-        let cx = Context::new(&arena);
-        let heap = Heap::new(&cx);
-
-        let mut vec = Vec::new_in(heap.by_ref());
-        vec.extend(iter::repeat(0u8).take(33667));
-        vec[12345] = 123;
-        drop(vec)
-    }
-
-    #[test]
     fn huge() {
         let arena = Arenas::new(MmapAlloc);
         let cx = Context::new(&arena);
@@ -64,5 +56,16 @@ mod test {
         vec.extend(iter::repeat(0u8).take(SLAB_SIZE + 5 * SHARD_SIZE));
         vec[SLAB_SIZE / 2] = 123;
         drop(vec)
+    }
+
+    #[test]
+    fn direct() {
+        let arena = Arenas::new(MmapAlloc);
+        let cx = Context::new(&arena);
+        let heap = Heap::new(&cx);
+
+        let layout = Layout::from_size_align(12345, SLAB_SIZE * 2).unwrap();
+        let ptr = heap.allocate(layout).unwrap();
+        unsafe { heap.deallocate(ptr.cast(), layout) }
     }
 }

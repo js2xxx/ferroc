@@ -36,6 +36,7 @@ pub struct Arena<Os: OsAlloc> {
     arena_id: usize,
     chunk: Chunk<Os>,
     header: Chunk<Os>,
+    is_exclusive: bool,
     slab_count: usize,
     search_index: AtomicUsize,
 }
@@ -47,6 +48,7 @@ impl<Os: OsAlloc> Arena<Os> {
         os: Os,
         slab_count: usize,
         align: Option<usize>,
+        is_exclusive: bool,
     ) -> Result<&'a mut Self, Error<Os>> {
         let layout = match align {
             Some(align) => slab_layout(slab_count)
@@ -55,12 +57,17 @@ impl<Os: OsAlloc> Arena<Os> {
             None => slab_layout(slab_count),
         };
 
-        let bitmap_size = (slab_count * SLAB_SIZE).div_ceil(BYTE_WIDTH);
-        let n = bitmap_size.div_ceil(mem::size_of::<AtomicUsize>());
+        let header_layout = if !is_exclusive {
+            let bitmap_size = (slab_count * SLAB_SIZE).div_ceil(BYTE_WIDTH);
+            let n = bitmap_size.div_ceil(mem::size_of::<AtomicUsize>());
 
-        let bitmap_layout = Layout::array::<AtomicUsize>(n).unwrap();
-        let (header_layout, offset) = Self::LAYOUT.extend(bitmap_layout).unwrap();
-        assert_eq!(offset, Self::LAYOUT.size());
+            let bitmap_layout = Layout::array::<AtomicUsize>(n).unwrap();
+            let (header_layout, offset) = Self::LAYOUT.extend(bitmap_layout).unwrap();
+            assert_eq!(offset, Self::LAYOUT.size());
+            header_layout
+        } else {
+            Self::LAYOUT
+        };
 
         let chunk = os.clone().allocate(layout).map_err(Error::Os)?;
         let header = os.allocate(header_layout).map_err(Error::Os)?;
@@ -72,18 +79,21 @@ impl<Os: OsAlloc> Arena<Os> {
                 arena_id: 0,
                 chunk,
                 header,
+                is_exclusive,
                 slab_count,
                 search_index: Default::default(),
             })
         };
 
-        // SAFETY: the bitmap pointer points to a valid & uninit memory block.
-        unsafe {
-            let maybe = arena.bitmap_ptr().as_uninit_slice_mut();
-            maybe.fill(MaybeUninit::new(0));
+        if !is_exclusive {
+            // SAFETY: the bitmap pointer points to a valid & uninit memory block.
+            unsafe {
+                let maybe = arena.bitmap_ptr().as_uninit_slice_mut();
+                maybe.fill(MaybeUninit::new(0));
+            }
+            let bitmap = arena.bitmap();
+            bitmap.set::<true>(slab_count.try_into().unwrap()..bitmap.len());
         }
-        let bitmap = arena.bitmap();
-        bitmap.set::<true>(slab_count.try_into().unwrap()..bitmap.len());
 
         Ok(arena)
     }
@@ -153,7 +163,7 @@ impl<Os: OsAlloc> Arena<Os> {
     }
 }
 
-const MAX_ARENAS: usize = 32;
+const MAX_ARENAS: usize = 112;
 pub struct Arenas<Os: OsAlloc> {
     pub(crate) os: Os,
     arenas: [AtomicPtr<Arena<Os>>; MAX_ARENAS],
@@ -180,24 +190,34 @@ impl<Os: OsAlloc> Arenas<Os> {
         &self,
         slab_count: usize,
         align: Option<usize>,
-    ) -> Result<Option<&Arena<Os>>, Error<Os>> {
-        let arena = Arena::new(self.os.clone(), slab_count, align)?;
+        is_exclusive: bool,
+    ) -> Result<&Arena<Os>, Error<Os>> {
+        let arena = Arena::new(self.os.clone(), slab_count, align, is_exclusive)?;
         let index = self.arena_count.fetch_add(1, AcqRel);
-        Ok(if index >= MAX_ARENAS {
-            // SAFETY: The arena is freshly allocated.
-            unsafe { Arena::drop(arena.into()) };
-            None
-        } else {
+        if index < MAX_ARENAS {
             arena.arena_id = index + 1;
             self.arenas[index].store(arena, Release);
-            Some(arena)
-        })
+            Ok(arena)
+        } else if let Some(index) = self.arenas.iter().position(|slot| {
+            slot.compare_exchange(ptr::null_mut(), arena, AcqRel, Acquire)
+                .is_ok()
+        }) {
+            arena.arena_id = index + 1;
+            Ok(arena)
+        } else {
+            self.arena_count.fetch_sub(1, AcqRel);
+            // SAFETY: The arena is freshly allocated.
+            unsafe { Arena::drop(arena.into()) };
+            Err(Error::ArenaExhausted)
+        }
     }
 
-    fn arenas(&self) -> impl Iterator<Item = &Arena<Os>> {
+    fn arenas(&self, is_exclusive: bool) -> impl Iterator<Item = (usize, &Arena<Os>)> {
         let iter = self.arenas[..self.arena_count.load(Acquire)].iter();
         // SAFETY: We check the nullity of the pointers.
-        iter.filter_map(|arena| unsafe { arena.load(Acquire).as_ref() })
+        iter.enumerate()
+            .filter_map(|(index, arena)| Some((index, unsafe { arena.load(Acquire).as_ref() }?)))
+            .filter(move |(_, arena)| arena.is_exclusive == is_exclusive)
     }
 
     pub fn allocate(
@@ -209,13 +229,12 @@ impl<Os: OsAlloc> Arenas<Os> {
     ) -> Result<SlabRef, Error<Os>> {
         let count = count.get().max(self.slab_count.load(Relaxed).isqrt());
         let ret = match self
-            .arenas()
-            .find_map(|arena| arena.allocate(thread_id, count, align, is_huge))
+            .arenas(false)
+            .find_map(|(_, arena)| arena.allocate(thread_id, count, align, is_huge))
         {
             Some(slab) => slab,
             None => {
-                let arena = self.push_arena(count, Some(align))?;
-                let arena = arena.ok_or(Error::ArenaExhausted)?;
+                let arena = self.push_arena(count, Some(align), false)?;
                 arena.allocate(thread_id, count, align, is_huge).unwrap()
             }
         };
@@ -235,6 +254,40 @@ impl<Os: OsAlloc> Arenas<Os> {
         // be dropped as long as any allocation from it is alive.
         let slab_count = unsafe { (*arena).deallocate(slab) };
         self.slab_count.fetch_sub(slab_count, Relaxed);
+    }
+
+    pub fn allocate_direct(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<Os>> {
+        let arena = self.push_arena(
+            layout.size().div_ceil(SLAB_SIZE),
+            Some(layout.align()),
+            true,
+        )?;
+        Ok(NonNull::from_raw_parts(
+            arena.chunk.pointer().cast(),
+            layout.size(),
+        ))
+    }
+
+    /// # Panics
+    ///
+    /// Panics if `ptr` is not allocated from this structure.
+    ///
+    /// # Safety
+    ///
+    /// - No more aliases to the `ptr` exist after calling this function.
+    pub unsafe fn deallocate_direct(&self, ptr: NonNull<u8>, _layout: Layout) {
+        if let Some((index, _)) = self
+            .arenas(true)
+            .find(|(_, arena)| arena.chunk.pointer().cast() == ptr)
+        {
+            let arena = self.arenas[index].swap(ptr::null_mut(), AcqRel);
+            debug_assert!(!arena.is_null());
+            // SAFETY: `arena` is exclusive.
+            unsafe { Arena::drop(NonNull::new_unchecked(arena)) }
+        } else {
+            #[cfg(debug_assertions)]
+            panic!("deallocating memory not from these arenas")
+        }
     }
 }
 
