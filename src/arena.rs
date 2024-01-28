@@ -155,7 +155,7 @@ impl<Os: OsAlloc> Arena<Os> {
 
 const MAX_ARENAS: usize = 32;
 pub struct Arenas<Os: OsAlloc> {
-    os: Os,
+    pub(crate) os: Os,
     arenas: [AtomicPtr<Arena<Os>>; MAX_ARENAS],
     arena_count: AtomicUsize,
     slab_count: AtomicUsize,

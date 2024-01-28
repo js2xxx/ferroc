@@ -371,6 +371,7 @@ impl<'a> Shard<'a> {
         debug_assert!(size > SHARD_SIZE);
 
         let (slab, _) = self.slab();
+
         slab.used.set(slab.used.get() + 1);
         self.obj_size.store(size, Relaxed);
         self.cap_limit.set(1);
@@ -380,15 +381,16 @@ impl<'a> Shard<'a> {
     pub fn init(&self, obj_size: usize) -> Option<&'a Shard<'a>> {
         debug_assert!(obj_size <= SHARD_SIZE);
 
+        let (slab, index) = self.slab();
+
         let shard_count = self.shard_count.replace(1) - 1;
         let next_shard = (shard_count > 0).then(|| {
-            let (slab, index) = self.slab();
             let next_shard = &slab.shards[index + 1];
             next_shard.shard_count.set(shard_count);
-            slab.used.set(slab.used.get() + 1);
             next_shard
         });
 
+        slab.used.set(slab.used.get() + 1);
         let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
         self.cap_limit.set(SHARD_SIZE / obj_size);
 
