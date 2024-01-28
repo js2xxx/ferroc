@@ -106,7 +106,7 @@ impl<Os: OsAlloc> Arena<Os> {
         Bitmap::new(unsafe { slice.as_ref() })
     }
 
-    pub fn allocate_slices(&self, count: usize) -> Option<NonNull<[u8]>> {
+    fn allocate_slices(&self, count: usize) -> Option<NonNull<[u8]>> {
         let start = self.search_index.load(Relaxed);
         let (idx, bit) = self.bitmap().allocate(start, count.try_into().ok()?)?;
         self.search_index.store(idx, Relaxed);
@@ -132,7 +132,7 @@ impl<Os: OsAlloc> Arena<Os> {
     /// - `slab` must be previously allocated from this arena;
     /// - No more references to the `slab` or its shards exist after calling
     ///   this function.
-    pub unsafe fn deallocate(&self, slab: SlabRef) -> usize {
+    unsafe fn deallocate(&self, slab: SlabRef) -> usize {
         let (ptr, len) = slab.into_raw().to_raw_parts();
         let offset = unsafe { ptr.cast::<u8>().sub_ptr(self.chunk.pointer().cast()) };
 
@@ -178,8 +178,7 @@ impl<Os: OsAlloc> Arenas<Os> {
             None
         } else {
             arena.arena_id = index + 1;
-            let ptr = arena as *const Arena<Os>;
-            self.arenas[index].store(ptr.cast_mut(), Release);
+            self.arenas[index].store(arena, Release);
             Some(arena)
         })
     }
@@ -229,8 +228,8 @@ impl<Os: OsAlloc> Arenas<Os> {
 
 impl<Os: OsAlloc> Drop for Arenas<Os> {
     fn drop(&mut self) {
-        let iter = self.arenas[..self.arena_count.load(Acquire)].iter();
-        iter.filter_map(|arena| NonNull::new(arena.load(Acquire)))
+        let iter = self.arenas[..*self.arena_count.get_mut()].iter_mut();
+        iter.filter_map(|arena| NonNull::new(mem::replace(arena.get_mut(), ptr::null_mut())))
             // SAFETY: All the arenas are unreferenced due to the lifetime model.
             .for_each(|arena| unsafe { Arena::drop(arena) })
     }
