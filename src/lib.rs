@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![feature(allocator_api)]
+#![feature(isqrt)]
 #![feature(let_chains)]
 #![feature(non_null_convenience)]
 #![feature(pointer_is_aligned)]
@@ -23,14 +24,14 @@ mod test {
     use core::{alloc::Allocator, iter};
 
     use crate::{
-        arena::{Arena, SHARD_SIZE, SLAB_SIZE},
+        arena::{Arenas, SHARD_SIZE, SLAB_SIZE},
         heap::{Context, Heap},
         MmapAlloc,
     };
 
     #[test]
     fn basic() {
-        let arena = Arena::new(MmapAlloc, 3).unwrap();
+        let arena = Arenas::new(MmapAlloc);
         let cx = Context::new(&arena);
         let heap = Heap::new(&cx);
 
@@ -43,7 +44,7 @@ mod test {
 
     #[test]
     fn siufeh() {
-        let arena = Arena::new(MmapAlloc, 3).unwrap();
+        let arena = Arenas::new(MmapAlloc);
         let cx = Context::new(&arena);
         let heap = Heap::new(&cx);
 
@@ -55,7 +56,7 @@ mod test {
 
     #[test]
     fn huge() {
-        let arena = Arena::new(MmapAlloc, 3).unwrap();
+        let arena = Arenas::new(MmapAlloc);
         let cx = Context::new(&arena);
         let heap = Heap::new(&cx);
 
