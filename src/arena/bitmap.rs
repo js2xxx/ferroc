@@ -235,7 +235,7 @@ impl StorageExt for AtomicUsize {
 
         let mut cur = self.load(Relaxed);
         loop {
-            let mut bit = cur.trailing_zeros();
+            let mut bit = cur.trailing_ones();
             let bit = loop {
                 if bit > end {
                     return None;

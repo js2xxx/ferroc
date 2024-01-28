@@ -33,29 +33,26 @@ pub(crate) const SHARD_COUNT: usize = SLAB_SIZE / SHARD_SIZE;
 
 pub struct Arena<Os: OsAlloc> {
     chunk: Chunk<Os>,
-    // slab_count: usize,
-    header_count: usize,
-
+    header: Chunk<Os>,
+    slab_count: usize,
     search_index: AtomicUsize,
 }
 
 impl<Os: OsAlloc> Arena<Os> {
-    pub fn new(chunk: Chunk<Os>) -> Self {
-        let layout = chunk.layout();
-        assert!(layout.size() >= SLAB_SIZE);
-        assert!(layout.align() % SLAB_SIZE == 0);
+    pub fn new(os: Os, slab_count: usize) -> Result<Self, Os::Error> {
+        let layout = slab_layout(slab_count);
 
-        let slab_count = layout.size() / SLAB_SIZE;
+        let bitmap_size = (slab_count * SLAB_SIZE).div_ceil(BYTE_WIDTH);
+        let n = bitmap_size.div_ceil(mem::size_of::<AtomicUsize>());
+        let bitmap_layout = Layout::array::<AtomicUsize>(n).unwrap();
 
-        let bitmap_size = slab_count.div_ceil(BYTE_WIDTH);
-        let bitmap_count = bitmap_size.div_ceil(SLAB_SIZE);
-
-        let header_count = bitmap_count;
+        let chunk = os.clone().allocate(layout)?;
+        let header = os.allocate(bitmap_layout)?;
 
         let arena = Arena {
             chunk,
-            // slab_count,
-            header_count,
+            header,
+            slab_count,
             search_index: Default::default(),
         };
 
@@ -65,16 +62,14 @@ impl<Os: OsAlloc> Arena<Os> {
             maybe.fill(MaybeUninit::new(0));
         }
         let bitmap = arena.bitmap();
-        bitmap.set::<true>(0..header_count.try_into().unwrap());
         bitmap.set::<true>(slab_count.try_into().unwrap()..bitmap.len());
 
-        arena
+        Ok(arena)
     }
 
     fn bitmap_ptr(&self) -> NonNull<[u8]> {
-        let pointer = self.chunk.pointer();
-        let size = self.header_count * SLAB_SIZE;
-        NonNull::slice_from_raw_parts(pointer.as_non_null_ptr(), size)
+        let (ptr, _) = self.header.pointer().to_raw_parts();
+        NonNull::from_raw_parts(ptr, (self.slab_count * SLAB_SIZE).div_ceil(BYTE_WIDTH))
     }
 
     fn bitmap(&self) -> &Bitmap {
@@ -91,6 +86,8 @@ impl<Os: OsAlloc> Arena<Os> {
 
         let offset = (idx * BYTE_WIDTH + (bit as usize)) * SLAB_SIZE;
         Some(NonNull::slice_from_raw_parts(
+            // SAFETY: `idx` and `bit` is valid, and thus `offset` is within the chunk memory
+            // range.
             unsafe { self.chunk.pointer().cast().add(offset) },
             SLAB_SIZE * count,
         ))
