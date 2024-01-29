@@ -17,11 +17,21 @@ extern crate alloc;
 
 pub mod arena;
 pub mod heap;
-pub mod os;
+mod os;
 mod slab;
 
 #[cfg(feature = "os-mmap")]
-pub use os::mmap::MmapAlloc;
+pub type Global = self::os::mmap::MmapAlloc;
+pub use self::os::{Chunk, OsAlloc};
+
+#[cfg(feature = "os-mmap")]
+pub type Heap<'a> = self::heap::Heap<'a, Global>;
+#[cfg(feature = "os-mmap")]
+pub type Context<'a> = self::heap::Context<'a, Global>;
+#[cfg(feature = "os-mmap")]
+pub type Arenas<'a> = self::arena::Arenas<Global>;
+#[cfg(feature = "os-mmap")]
+pub type Error<'a> = self::arena::Error<Global>;
 
 #[cfg(test)]
 mod test {
@@ -32,14 +42,13 @@ mod test {
     };
 
     use crate::{
-        arena::{Arenas, SHARD_SIZE, SLAB_SIZE},
-        heap::{Context, Heap},
-        MmapAlloc,
+        arena::{SHARD_SIZE, SLAB_SIZE},
+        Arenas, Context, Heap,
     };
 
     #[test]
     fn basic() {
-        let arena = Arenas::new(MmapAlloc);
+        let arena = Arenas::new(Default::default());
         let cx = Context::new(&arena);
         let heap = Heap::new(&cx);
 
@@ -52,7 +61,7 @@ mod test {
 
     #[test]
     fn huge() {
-        let arena = Arenas::new(MmapAlloc);
+        let arena = Arenas::new(Default::default());
         let cx = Context::new(&arena);
         let heap = Heap::new(&cx);
 
@@ -64,7 +73,7 @@ mod test {
 
     #[test]
     fn direct() {
-        let arena = Arenas::new(MmapAlloc);
+        let arena = Arenas::new(Default::default());
         let cx = Context::new(&arena);
         let heap = Heap::new(&cx);
 
