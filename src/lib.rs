@@ -28,7 +28,8 @@ pub use self::os::{Chunk, OsAlloc};
 #[cfg(test)]
 mod test {
     use alloc::vec;
-    use core::alloc::{Allocator, Layout};
+    use core::alloc::Layout;
+    use std::thread;
 
     use crate::{
         arena::{SHARD_SIZE, SLAB_SIZE},
@@ -58,5 +59,13 @@ mod test {
         let layout = Layout::from_size_align(12345, SLAB_SIZE * 2).unwrap();
         let ptr = FERROC.allocate(layout).unwrap();
         unsafe { FERROC.deallocate(ptr.cast(), layout) }
+    }
+
+    #[test]
+    fn multithread() {
+        let mut vec = vec![0u8; 100];
+        vec.extend([1; 100]);
+        let j = thread::spawn(move || drop(vec));
+        j.join().unwrap();
     }
 }
