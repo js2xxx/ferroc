@@ -210,6 +210,13 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
     }
 
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<Os>> {
+        if layout.size() == 0 {
+            // SAFETY: Alignments are not zero.
+            return Ok(unsafe {
+                let addr = NonNull::new_unchecked(ptr::invalid_mut(layout.align()));
+                NonNull::from_raw_parts(addr, 0)
+            });
+        }
         if layout.size() <= SHARD_SIZE && layout.size() % layout.align() == 0 {
             return self.pop(layout.size());
         }
@@ -221,6 +228,9 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
     /// `ptr` must point to an owned, valid memory block of `layout`, previously
     /// allocated by a certain instance of `Heap` alive in the scope.
     pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        if layout.size() == 0 {
+            return;
+        }
         if layout.align() >= SLAB_SIZE {
             unsafe { self.cx.arena.deallocate_direct(ptr, layout) };
             return;

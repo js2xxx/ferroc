@@ -392,7 +392,7 @@ impl<'a> Shard<'a> {
 
         // SAFETY: the `area` is owned by this shard in a similar way to `Cell<[u8]>`.
         let iter = (capacity..capacity + count).map(|index| unsafe {
-            let ptr = area.as_non_null_ptr().add(index * obj_size);
+            let ptr = area.cast::<u8>().add(index * obj_size);
             ptr.write_bytes(0, mem::size_of::<Block>());
             BlockRef::from_raw(ptr.cast())
         });
