@@ -32,7 +32,7 @@ pub(crate) const SHARD_SIZE: usize = 1 << SHARD_SHIFT;
 
 pub(crate) const SHARD_COUNT: usize = SLAB_SIZE / SHARD_SIZE;
 
-pub struct Arena<Os: OsAlloc> {
+struct Arena<Os: OsAlloc> {
     arena_id: usize,
     chunk: Chunk<Os>,
     header: Chunk<Os>,
@@ -44,20 +44,8 @@ pub struct Arena<Os: OsAlloc> {
 impl<Os: OsAlloc> Arena<Os> {
     const LAYOUT: Layout = Layout::new::<Self>();
 
-    pub fn new<'a>(
-        os: Os,
-        slab_count: usize,
-        align: Option<usize>,
-        is_exclusive: bool,
-    ) -> Result<&'a mut Self, Error<Os>> {
-        let layout = match align {
-            Some(align) => slab_layout(slab_count)
-                .align_to(align)
-                .expect("invalid align"),
-            None => slab_layout(slab_count),
-        };
-
-        let header_layout = if !is_exclusive {
+    fn header_layout(slab_count: usize, is_exclusive: bool) -> Layout {
+        if !is_exclusive {
             let bitmap_size = (slab_count * SLAB_SIZE).div_ceil(BYTE_WIDTH);
             let n = bitmap_size.div_ceil(mem::size_of::<AtomicUsize>());
 
@@ -67,14 +55,22 @@ impl<Os: OsAlloc> Arena<Os> {
             header_layout
         } else {
             Self::LAYOUT
-        };
+        }
+    }
 
-        let chunk = os.clone().allocate(layout).map_err(Error::Os)?;
-        let header = os.allocate(header_layout).map_err(Error::Os)?;
-
+    /// # Safety
+    ///
+    /// `header` must contains a valid bitmap covering exact all memory blocks
+    /// in `chunk` (i.e. `slab_count`).
+    unsafe fn from_dynamic<'a>(
+        header: Chunk<Os>,
+        chunk: Chunk<Os>,
+        is_exclusive: bool,
+        slab_count: usize,
+    ) -> &'a mut Arena<Os> {
         // SAFETY: The pointer is properly aligned.
         let arena = unsafe {
-            let pointer = header.pointer().cast::<Self>();
+            let pointer = header.pointer().cast::<Arena<Os>>();
             pointer.as_uninit_mut().write(Arena {
                 arena_id: 0,
                 chunk,
@@ -95,7 +91,40 @@ impl<Os: OsAlloc> Arena<Os> {
             bitmap.set::<true>(slab_count.try_into().unwrap()..bitmap.len());
         }
 
-        Ok(arena)
+        arena
+    }
+
+    fn new<'a>(
+        os: Os,
+        slab_count: usize,
+        align: Option<usize>,
+        is_exclusive: bool,
+    ) -> Result<&'a mut Self, Error<Os>> {
+        let layout = match align {
+            Some(align) => slab_layout(slab_count)
+                .align_to(align)
+                .expect("invalid align"),
+            None => slab_layout(slab_count),
+        };
+
+        let header_layout = Self::header_layout(slab_count, is_exclusive);
+
+        let chunk = os.clone().allocate(layout).map_err(Error::Os)?;
+        let header = os.allocate(header_layout).map_err(Error::Os)?;
+
+        // SAFETY: `header` is valid.
+        Ok(unsafe { Self::from_dynamic(header, chunk, is_exclusive, slab_count) })
+    }
+
+    fn new_chunk<'a>(os: Os, chunk: Chunk<Os>) -> Result<&'a mut Self, Error<Os>> {
+        let size = chunk.pointer().len();
+        let slab_count = size / SLAB_SIZE;
+        assert!(chunk.pointer().is_aligned_to(SLAB_SIZE));
+
+        let header_layout = Self::header_layout(slab_count, false);
+        let header = os.allocate(header_layout).map_err(Error::Os)?;
+
+        Ok(unsafe { Self::from_dynamic(header, chunk, false, slab_count) })
     }
 
     /// # Safety
@@ -177,7 +206,7 @@ impl<Os: OsAlloc> Arenas<Os> {
     #[allow(clippy::declare_interior_mutable_const)]
     const ARENA_INIT: AtomicPtr<Arena<Os>> = AtomicPtr::new(ptr::null_mut());
 
-    pub fn new(os: Os) -> Self {
+    pub const fn new(os: Os) -> Self {
         Arenas {
             os,
             arenas: [Self::ARENA_INIT; MAX_ARENAS],
@@ -186,13 +215,7 @@ impl<Os: OsAlloc> Arenas<Os> {
         }
     }
 
-    fn push_arena(
-        &self,
-        slab_count: usize,
-        align: Option<usize>,
-        is_exclusive: bool,
-    ) -> Result<&Arena<Os>, Error<Os>> {
-        let arena = Arena::new(self.os.clone(), slab_count, align, is_exclusive)?;
+    fn push_arena<'a>(&'a self, arena: &'a mut Arena<Os>) -> Result<&'a Arena<Os>, Error<Os>> {
         let index = self.arena_count.fetch_add(1, AcqRel);
         if index < MAX_ARENAS {
             arena.arena_id = index + 1;
@@ -234,12 +257,23 @@ impl<Os: OsAlloc> Arenas<Os> {
         {
             Some(slab) => slab,
             None => {
-                let arena = self.push_arena(count, Some(align), false)?;
+                let arena = Arena::new(self.os.clone(), count, Some(align), false)?;
+                let arena = self.push_arena(arena)?;
                 arena.allocate(thread_id, count, align, is_huge).unwrap()
             }
         };
         self.slab_count.fetch_add(count, Relaxed);
         Ok(ret)
+    }
+
+    pub fn os_alloc(&self) -> &Os {
+        &self.os
+    }
+
+    pub fn manage(&self, chunk: Chunk<Os>) -> Result<(), Error<Os>> {
+        let arena = Arena::new_chunk(self.os.clone(), chunk)?;
+        self.push_arena(arena)?;
+        Ok(())
     }
 
     /// # Safety
@@ -257,11 +291,13 @@ impl<Os: OsAlloc> Arenas<Os> {
     }
 
     pub fn allocate_direct(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<Os>> {
-        let arena = self.push_arena(
+        let arena = Arena::new(
+            self.os.clone(),
             layout.size().div_ceil(SLAB_SIZE),
             Some(layout.align()),
             true,
         )?;
+        let arena = self.push_arena(arena)?;
         Ok(NonNull::from_raw_parts(
             arena.chunk.pointer().cast(),
             layout.size(),
