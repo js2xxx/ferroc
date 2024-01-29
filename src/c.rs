@@ -24,9 +24,11 @@ unsafe extern "C" fn posix_memalign(slot: *mut *mut c_void, align: usize, size: 
     if slot.is_null() {
         return libc::EINVAL;
     }
-    let res = Ferroc.allocate(layout);
-    slot.write(res.map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast()));
-    0
+    if let Ok(ptr) = Ferroc.allocate(layout) {
+        slot.write(ptr.as_ptr().cast());
+        return 0;
+    }
+    libc::ENOMEM
 }
 
 #[no_mangle]
