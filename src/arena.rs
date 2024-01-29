@@ -11,7 +11,7 @@ use core::{
 
 use self::bitmap::Bitmap;
 use crate::{
-    base::{Chunk, BaseAlloc},
+    base::{BaseAlloc, Chunk},
     slab::{Slab, SlabRef},
 };
 

@@ -6,7 +6,7 @@ name = "ferroc"
 version = "0.1.0"
 
 [lib]
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [features]
 base-mmap = ["dep:region"]
