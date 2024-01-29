@@ -153,7 +153,7 @@ impl<'a> Slab<'a> {
     pub(crate) unsafe fn shard_infos(
         this: NonNull<Self>,
         ptr: NonNull<()>,
-        _layout: Layout,
+        _layout: Option<Layout>,
     ) -> (NonNull<Shard<'a>>, BlockRef<'a>, usize) {
         // SAFETY: The same as `shard_meta`.
         let (shard, index) = unsafe { Self::shard_meta(this, ptr) };

@@ -4,7 +4,6 @@ use core::{
     ptr::{self, NonNull},
 };
 
-#[cfg(feature = "base-mmap")]
 pub type Base = crate::base::MmapAlloc;
 
 pub type Heap<'a> = crate::heap::Heap<'a, Base>;
@@ -39,6 +38,16 @@ impl Ferroc {
     /// See [`Allocator::deallocate`] for more information.
     pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         HEAP.with(|heap| heap.deallocate(ptr, layout))
+    }
+
+    /// # Safety
+    ///
+    /// `ptr` must point to an owned, valid memory block, previously allocated
+    /// by a certain instance of `Heap` alive in the scope.
+    #[cfg(feature = "c")]
+    #[inline]
+    pub(crate) unsafe fn free(&self, ptr: NonNull<u8>) {
+        HEAP.with(|heap| heap.free(ptr))
     }
 }
 

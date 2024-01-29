@@ -223,17 +223,15 @@ impl<'a, B: BaseAlloc> Heap<'a, B> {
         self.pop_aligned(layout)
     }
 
-    /// # Safety
-    ///
-    /// `ptr` must point to an owned, valid memory block of `layout`, previously
-    /// allocated by a certain instance of `Heap` alive in the scope.
-    pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        if layout.size() == 0 {
+    unsafe fn dealloc_inner(&self, ptr: NonNull<u8>, layout: Option<Layout>) {
+        if matches!(layout, Some(l) if l.size() == 0) {
             return;
         }
         if ptr.is_aligned_to(SLAB_SIZE) {
-            debug_assert!(layout.align() >= SLAB_SIZE);
-            unsafe { self.cx.arena.deallocate_direct(ptr, layout) };
+            if let Some(l) = layout {
+                debug_assert!(l.align() >= SLAB_SIZE);
+            }
+            unsafe { self.cx.arena.deallocate_direct(ptr) };
             return;
         }
 
@@ -268,6 +266,25 @@ impl<'a, B: BaseAlloc> Heap<'a, B> {
             // We're deallocating from another thread.
             unsafe { Shard::push_block_mt(shard, block) }
         }
+    }
+
+    /// # Safety
+    ///
+    /// `ptr` must point to an owned, valid memory block of `layout`, previously
+    /// allocated by a certain instance of `Heap` alive in the scope.
+    #[inline]
+    pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        unsafe { self.dealloc_inner(ptr, Some(layout)) }
+    }
+
+    /// # Safety
+    ///
+    /// `ptr` must point to an owned, valid memory block, previously allocated
+    /// by a certain instance of `Heap` alive in the scope.
+    #[cfg(feature = "c")]
+    #[inline]
+    pub(crate) unsafe fn free(&self, ptr: NonNull<u8>) {
+        unsafe { self.dealloc_inner(ptr, None) }
     }
 
     fn clear_abandoned_huge(&self) {
