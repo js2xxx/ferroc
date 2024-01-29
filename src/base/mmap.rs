@@ -2,7 +2,7 @@ use core::{alloc::Layout, mem::ManuallyDrop, ptr::NonNull};
 
 use region::{Allocation, Protection};
 
-use super::{Chunk, OsAlloc};
+use super::{Chunk, BaseAlloc};
 
 #[derive(Debug, Clone, Copy, Default, Hash)]
 pub struct MmapAlloc;
@@ -13,7 +13,7 @@ impl MmapAlloc {
     }
 }
 
-unsafe impl OsAlloc for MmapAlloc {
+unsafe impl BaseAlloc for MmapAlloc {
     const IS_ZEROED: bool = true;
 
     type Error = region::Error;
