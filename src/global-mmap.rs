@@ -33,7 +33,12 @@ impl Ferroc {
         HEAP.with(|heap| heap.allocate(layout))
     }
 
-    pub fn layout_of(&self, ptr: NonNull<u8>) -> Option<Layout> {
+    /// # Safety
+    ///
+    /// `ptr` must point to an owned, valid memory block of `layout`, previously
+    /// allocated by a certain instance of `Heap` alive in the scope, created
+    /// from the same arena.
+    pub unsafe fn layout_of(&self, ptr: NonNull<u8>) -> Option<Layout> {
         HEAP.with(|heap| heap.layout_of(ptr))
     }
 
