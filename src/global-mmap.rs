@@ -1,6 +1,7 @@
+mod thread;
+
 use core::{
     alloc::{AllocError, Allocator, GlobalAlloc, Layout},
-    mem,
     ptr::{self, NonNull},
 };
 
@@ -13,24 +14,16 @@ pub type Error = crate::arena::Error<Base>;
 
 pub static ARENAS: Arenas = Arenas::new(Base::new());
 
-thread_local! {
-    static CX: Context<'static> = Context::new(&ARENAS);
-
-    // SAFETY: The safety transmutation relies on the behavior of "first construct,
-    // last destruct".
-    static HEAP: Heap<'static> = Heap::new(CX.with(|cx| unsafe { mem::transmute(cx) }));
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Ferroc;
 
 impl Ferroc {
     pub fn collect(&self, force: bool) {
-        HEAP.with(|heap| heap.collect(force))
+        thread::with(|heap| heap.collect(force))
     }
 
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, Error> {
-        HEAP.with(|heap| heap.allocate(layout))
+        thread::with(|heap| heap.allocate(layout))
     }
 
     /// # Safety
@@ -39,14 +32,14 @@ impl Ferroc {
     /// allocated by a certain instance of `Heap` alive in the scope, created
     /// from the same arena.
     pub unsafe fn layout_of(&self, ptr: NonNull<u8>) -> Option<Layout> {
-        HEAP.with(|heap| heap.layout_of(ptr))
+        thread::with(|heap| heap.layout_of(ptr))
     }
 
     /// # Safety
     ///
     /// See [`Allocator::deallocate`] for more information.
     pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        HEAP.with(|heap| heap.deallocate(ptr, layout))
+        thread::with(|heap| heap.deallocate(ptr, layout))
     }
 
     /// # Safety
@@ -56,17 +49,17 @@ impl Ferroc {
     #[cfg(feature = "c")]
     #[inline]
     pub(crate) unsafe fn free(&self, ptr: NonNull<u8>) {
-        HEAP.with(|heap| heap.free(ptr))
+        thread::with(|heap| heap.free(ptr))
     }
 }
 
 unsafe impl Allocator for Ferroc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        HEAP.with(|heap| Allocator::allocate(&heap, layout))
+        thread::with(|heap| Allocator::allocate(&heap, layout))
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        HEAP.with(|heap| Allocator::deallocate(&heap, ptr, layout))
+        thread::with(|heap| Allocator::deallocate(&heap, ptr, layout))
     }
 }
 

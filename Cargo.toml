@@ -21,6 +21,11 @@ region = {version = "3.0", optional = true}
 [build-dependencies]
 cbindgen = {version = "0.24", optional = true}
 
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+
 [workspace]
 members = ["fuzz"]
 resolver = "2"
