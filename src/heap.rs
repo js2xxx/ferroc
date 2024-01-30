@@ -1,5 +1,6 @@
 use core::{
     alloc::{AllocError, Allocator, Layout},
+    cell::Cell,
     num::NonZeroUsize,
     ptr::{self, NonNull},
     sync::atomic::{AtomicU64, Ordering::*},
@@ -41,6 +42,7 @@ pub struct Context<'a, B: BaseAlloc> {
     thread_id: u64,
     arena: &'a Arenas<B>,
     free_shards: ShardList<'a>,
+    heap_count: Cell<usize>,
 }
 
 impl<'a, B: BaseAlloc> Context<'a, B> {
@@ -50,6 +52,7 @@ impl<'a, B: BaseAlloc> Context<'a, B> {
             thread_id: ID.fetch_add(1, Relaxed),
             arena,
             free_shards: Default::default(),
+            heap_count: Cell::new(0),
         }
     }
 
@@ -86,6 +89,14 @@ pub struct Heap<'a, B: BaseAlloc> {
 
 impl<'a, B: BaseAlloc> Heap<'a, B> {
     pub fn new(cx: &'a Context<'a, B>) -> Self {
+        const MAX_HEAP_COUNT: usize = 1;
+
+        let count = cx.heap_count.get() + 1;
+        assert!(
+            count <= MAX_HEAP_COUNT,
+            "a context can only have at most {MAX_HEAP_COUNT} heap(s)"
+        );
+        cx.heap_count.set(count);
         Heap {
             cx,
             shards: [ShardList::DEFAULT; OBJ_SIZE_COUNT],
@@ -173,7 +184,7 @@ impl<'a, B: BaseAlloc> Heap<'a, B> {
 
             // 3. Try to clear abandoned huge shards and allocate/reclaim a slab.
             if !has_unfulled {
-                self.clear_abandoned_huge();
+                self.collect_huge();
                 let free = self.cx.alloc_slab(NonZeroUsize::MIN, SLAB_SIZE, false)?;
                 if let Some(next) = free.init(OBJ_SIZES[index]) {
                     self.cx.free_shards.push(next);
@@ -269,7 +280,8 @@ impl<'a, B: BaseAlloc> Heap<'a, B> {
     /// # Safety
     ///
     /// `ptr` must point to an owned, valid memory block of `layout`, previously
-    /// allocated by a certain instance of `Heap` alive in the scope.
+    /// allocated by a certain instance of `Heap` alive in the scope, created
+    /// from the same arena.
     #[inline]
     pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         unsafe { self.dealloc_inner(ptr, Some(layout)) }
@@ -278,14 +290,15 @@ impl<'a, B: BaseAlloc> Heap<'a, B> {
     /// # Safety
     ///
     /// `ptr` must point to an owned, valid memory block, previously allocated
-    /// by a certain instance of `Heap` alive in the scope.
+    /// by a certain instance of `Heap` alive in the scope, created from the
+    /// same arena.
     #[cfg(feature = "c")]
     #[inline]
     pub(crate) unsafe fn free(&self, ptr: NonNull<u8>) {
         unsafe { self.dealloc_inner(ptr, None) }
     }
 
-    fn clear_abandoned_huge(&self) {
+    fn collect_huge(&self) {
         let huge = self.huge_shards.drain(|shard| {
             shard.collect(false);
             shard.is_unused()
@@ -297,7 +310,7 @@ impl<'a, B: BaseAlloc> Heap<'a, B> {
         let shards = self.shards.iter().flatten();
         shards.for_each(|shard| shard.collect(force));
 
-        self.clear_abandoned_huge();
+        self.collect_huge();
     }
 }
 
