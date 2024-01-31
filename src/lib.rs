@@ -24,10 +24,17 @@ mod c;
 mod global;
 pub mod heap;
 mod slab;
+#[cfg(feature = "stat")]
+mod stat;
+
+#[cfg(not(feature = "stat"))]
+type Stat = ();
 
 #[cfg(feature = "global")]
 #[allow(unused_imports)]
 pub use self::global::*;
+#[cfg(feature = "stat")]
+pub use self::stat::Stat;
 
 #[cfg(test)]
 mod test {
@@ -54,7 +61,7 @@ mod test {
     fn huge() {
         let mut vec = vec![0u8; SLAB_SIZE + 5 * SHARD_SIZE];
         vec[SLAB_SIZE / 2] = 123;
-        drop(vec)
+        drop(vec);
     }
 
     #[test]
@@ -66,9 +73,12 @@ mod test {
 
     #[test]
     fn multithread() {
-        let mut vec = vec![0u8; 100];
-        vec.extend([1; 100]);
-        let j = thread::spawn(move || drop(vec));
-        j.join().unwrap();
+        let j = thread::spawn(move || {
+            let mut vec = vec![0u8; 100];
+            vec.extend([1; 100]);
+            vec
+        });
+        let vec = j.join().unwrap();
+        drop(vec);
     }
 }

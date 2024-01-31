@@ -13,6 +13,7 @@ base-mmap = ["dep:region"]
 c = ["global", "base-mmap", "dep:libc", "dep:cbindgen"]
 default = ["base-mmap", "global", "c"]
 global = []
+stat = []
 
 [dependencies]
 libc = {version = "0.2", optional = true}
