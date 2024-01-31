@@ -3,7 +3,11 @@ mod bare;
 #[cfg(feature = "base-mmap")]
 mod mmap;
 
-use core::{alloc::Layout, ptr::NonNull};
+use core::{
+    alloc::{AllocError, Allocator, Layout},
+    mem::ManuallyDrop,
+    ptr::NonNull,
+};
 
 #[cfg(feature = "base-baremetal")]
 pub use self::bare::BareMetal;
@@ -27,9 +31,53 @@ pub unsafe trait BaseAlloc: Clone {
 
     /// # Safety
     ///
-    /// `chunk` must point to a valid & owned memory block containing `layout`,
-    /// previously allocated by this allocator.
+    /// - `chunk` must point to a valid & owned memory block containing
+    ///   `layout`, previously allocated by this allocator.
+    /// - `chunk` must not be used any longer after the deallocation.
     unsafe fn deallocate(chunk: &mut Chunk<Self>);
+}
+
+// SAFETY: Any `Allocator` is a valid `BaseAlloc`.
+unsafe impl<A: Allocator + Clone> BaseAlloc for A {
+    /// Regardless of whether the allocator is zeroed by default.
+    const IS_ZEROED: bool = false;
+
+    type Handle = ManuallyDrop<Self>;
+
+    type Error = AllocError;
+
+    fn allocate(self, layout: Layout) -> Result<Chunk<Self>, Self::Error> {
+        let ptr = Allocator::allocate(&self, layout)?;
+        Ok(unsafe { Chunk::new(ptr.cast(), layout, ManuallyDrop::new(self)) })
+    }
+
+    unsafe fn deallocate(chunk: &mut Chunk<Self>) {
+        let ptr = chunk.pointer().cast();
+        chunk.handle.deallocate(ptr, chunk.layout());
+        ManuallyDrop::drop(&mut chunk.handle);
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Zeroed<A: Allocator>(pub A);
+
+unsafe impl<A: Allocator + Clone> BaseAlloc for Zeroed<A> {
+    const IS_ZEROED: bool = true;
+
+    type Handle = ManuallyDrop<A>;
+
+    type Error = AllocError;
+
+    fn allocate(self, layout: Layout) -> Result<Chunk<Self>, Self::Error> {
+        let ptr = Allocator::allocate_zeroed(&self.0, layout)?;
+        Ok(unsafe { Chunk::new(ptr.cast(), layout, ManuallyDrop::new(self.0)) })
+    }
+
+    unsafe fn deallocate(chunk: &mut Chunk<Self>) {
+        let ptr = chunk.pointer().cast();
+        chunk.handle.deallocate(ptr, chunk.layout());
+        ManuallyDrop::drop(&mut chunk.handle);
+    }
 }
 
 /// An owned representation of a valid memory block. Implementations like

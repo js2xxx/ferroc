@@ -3,6 +3,7 @@ pub mod thread;
 
 #[cfg(feature = "stat")]
 #[macro_export]
+#[doc(hidden)]
 macro_rules! config_stat {
     () => {
         $vis fn stat(&self) -> $crate::stat::Stat {
@@ -13,27 +14,37 @@ macro_rules! config_stat {
 
 #[cfg(not(feature = "stat"))]
 #[macro_export]
+#[doc(hidden)]
 macro_rules! config_stat {
     () => {};
 }
 
 #[macro_export]
-#[allow_internal_unstable(allocator_api)]
-macro_rules! config {
+#[doc(hidden)]
+macro_rules! config_inner {
     (@TYPES $vis:vis, $bt:ty) => {
+        $vis type Chunk = $crate::base::Chunk<$bt>;
         $vis type Heap<'arena, 'cx> = $crate::heap::Heap<'arena, 'cx, $bt>;
         $vis type Context<'arena> = $crate::heap::Context<'arena, $bt>;
         $vis type Arenas = $crate::arena::Arenas<$bt>;
         $vis type Error = $crate::arena::Error<$bt>;
     };
     (@ARENA $vis:vis, $bs:expr) => {
-        $vis static ARENAS: Arenas = Arenas::new($bs);
+        static ARENAS: Arenas = Arenas::new($bs);
     };
-    (@DEF $vis:vis, $name:ident) => {
+    (@DEF $vis:vis, $name:ident, $bt:ty) => {
         #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
         $vis struct $name;
 
         impl $name {
+            $vis fn base(&self) -> &$bt {
+                ARENAS.base()
+            }
+
+            $vis fn manage(&self, chunk: Chunk) -> Result<(), Error> {
+                ARENAS.manage(chunk)
+            }
+
             $vis fn collect(&self, force: bool) {
                 thread::with(|heap| heap.collect(force))
             }
@@ -94,42 +105,46 @@ macro_rules! config {
             }
         }
     };
+}
 
+#[macro_export]
+#[allow_internal_unstable(allocator_api)]
+macro_rules! config {
     ($vis:vis $name:ident($bs:expr) => $bt:ty: $($options:tt)*) => {
         $crate::thread_mod!($($options)*);
-        $crate::config!(@TYPES $vis, $bt);
-        $crate::config!(@ARENA $vis, $bs);
-        $crate::config!(@DEF $vis, $name);
+        $crate::config_inner!(@TYPES $vis, $bt);
+        $crate::config_inner!(@ARENA $vis, $bs);
+        $crate::config_inner!(@DEF $vis, $name, $bt);
     };
     ($vis:vis $name:ident($bs:expr) => $bt:ty) => {
-        $crate::config!(@TYPES $vis, $bt);
-        $crate::config!(@ARENA $vis, $bs);
         $crate::thread_mod!();
-        $crate::config!(@DEF $vis, $name);
+        $crate::config_inner!(@TYPES $vis, $bt);
+        $crate::config_inner!(@ARENA $vis, $bs);
+        $crate::config_inner!(@DEF $vis, $name, $bt);
     };
     ($vis:vis $name:ident => $bt:ty: $($options:tt)*) => {
-        $crate::config!(@TYPES $vis, $bt);
-        $crate::config!(@ARENA $vis, <$bt>::new());
         $crate::thread_mod!($($options)*);
-        $crate::config!(@DEF $vis, $name);
+        $crate::config_inner!(@TYPES $vis, $bt);
+        $crate::config_inner!(@ARENA $vis, <$bt>::new());
+        $crate::config_inner!(@DEF $vis, $name, $bt);
     };
     ($vis:vis $name:ident => $bt:ty) => {
-        $crate::config!(@TYPES $vis, $bt);
-        $crate::config!(@ARENA $vis, <$bt>::new());
         $crate::thread_mod!();
-        $crate::config!(@DEF $vis, $name);
+        $crate::config_inner!(@TYPES $vis, $bt);
+        $crate::config_inner!(@ARENA $vis, <$bt>::new());
+        $crate::config_inner!(@DEF $vis, $name, $bt);
     };
     ($vis:vis $bt:ty: $($options:tt)*) => {
-        $crate::config!(@TYPES $vis, $bt);
-        $crate::config!(@ARENA $vis, <$bt>::new());
         $crate::thread_mod!($($options)*);
-        $crate::config!(@DEF $vis, Ferroc);
+        $crate::config_inner!(@TYPES $vis, $bt);
+        $crate::config_inner!(@ARENA $vis, <$bt>::new());
+        $crate::config_inner!(@DEF $vis, Ferroc, $bt);
     };
     ($vis:vis $bt:ty) => {
-        $crate::config!(@TYPES $vis, $bt);
-        $crate::config!(@ARENA $vis, <$bt>::new());
         $crate::thread_mod!();
-        $crate::config!(@DEF $vis, Ferroc);
+        $crate::config_inner!(@TYPES $vis, $bt);
+        $crate::config_inner!(@ARENA $vis, <$bt>::new());
+        $crate::config_inner!(@DEF $vis, Ferroc, $bt);
     };
 }
 
