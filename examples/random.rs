@@ -58,7 +58,6 @@ fn bench_one() -> Duration {
                 };
                 for _ in 0..iterations {
                     memory[index] = unsafe { allocate_one(size) };
-                    // println!(">> {index}");
                     index += 1;
 
                     if index == save_start {
@@ -78,9 +77,7 @@ fn bench_one() -> Duration {
                         }
 
                         memory[..save_start].iter_mut().for_each(|a| a.deallocate());
-                        // println!("<< 0..{save_start}");
                         memory[save_end..].iter_mut().for_each(|a| a.deallocate());
-                        // println!("<< {save_end}..{CALL_COUNT}");
 
                         if index == save_start {
                             index = save_end;
