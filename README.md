@@ -64,10 +64,11 @@ fn main() {
 
 ## Cargo Features
 
-- Basic structures: `Arenas`, `Context`s and `Heap`s;
+- Basic features: generic `Arenas`, `Context`s and `Heap`s;
+- `"stat"`: Statistics counters support;
+- `"base-static"`: Base allocator `Static`;
 - `"base-mmap"`: Base allocator `MmapAlloc` based on os-specific virtual memory managers (`std` required);
-- `"base-baremetal"`: Base allocator `BareMetal`;
-- `"global"`: Global allocator instantiation macros `config!` and `config_mod!`;
+- `"global"`: Global allocator instantiation macros `config!` and `config_mod!` (inner thread local statics are leaked by default);
 - `"libc"`: `libc` dependency (currently required by `pthread` option in `config*!` if you want a `pthread` thread-local destructor);
 - `"default"`: The default global allocator `Ferroc` provided by `MmapAlloc` and `pthread` thread-local destructor (consisting of all the features above);
 - `"c"`: `fe_*` C functions for C/C++ targets and a generated C/C++ header `"ferroc.h"` in the root directory, and replacement for default allocator functions such as `malloc` if `--cfg sys_alloc` is specified.

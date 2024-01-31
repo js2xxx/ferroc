@@ -9,10 +9,10 @@ version = "0.1.0"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [features]
-base-baremetal = []
 base-mmap = ["dep:region"]
+base-static = []
 c = ["default", "dep:cbindgen"]
-default = ["global", "base-mmap", "base-baremetal", "libc"]
+default = ["global", "base-mmap", "base-static", "libc"]
 global = []
 libc = ["dep:libc"]
 stat = []

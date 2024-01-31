@@ -6,11 +6,11 @@ use core::{
     sync::atomic::{AtomicPtr, Ordering::*},
 };
 
-use super::{BaseAlloc, Chunk, Static};
+use super::{BaseAlloc, Chunk, StaticHandle};
 
-/// An bare-metal base allocator, managing a constant sized block of memory.
+/// An allocator managing a constant sized block of static memory.
 ///
-/// By using a [`BareMetal`] allocator, users can
+/// By using a [`Static`] allocator, users can
 /// [`manage`](crate::arena::Arenas::manage) external static memory other than
 /// allocating from this allocator alone. However, `HEADER_CAP` must
 /// be set carefully because arena headers need to be allocated from this
@@ -22,12 +22,12 @@ use super::{BaseAlloc, Chunk, Static};
 /// ```rust,ignore
 /// use ferroc::{
 ///     arena::Arenas,
-///     base::{BareMetal, Chunk},
+///     base::{Static, Chunk},
 ///     heap::{Context, Heap},
 /// };
 ///
-/// static BASE: BareMetal<100> = BareMetal::new();
-/// static ARENAS: Arenas<&BareMetal<100>> = Arenas::new(&BASE);
+/// static BASE: Static<100> = Static::new();
+/// static ARENAS: Arenas<&Static<100>> = Arenas::new(&BASE);
 ///
 /// // Add external static memory blocks.
 /// ARENAS.manage(unsafe { Chunk::from_static(/* .. */) });
@@ -36,19 +36,26 @@ use super::{BaseAlloc, Chunk, Static};
 /// let cx = Context::new(&ARENAS);
 /// let heap = Heap::new(&cx);
 /// ```
-pub struct BareMetal<const HEADER_CAP: usize> {
+#[derive(Debug)]
+pub struct Static<const HEADER_CAP: usize> {
     memory: UnsafeCell<[usize; HEADER_CAP]>,
     top: AtomicPtr<()>,
 }
 
-// `memory` is guarded by `top`.
-unsafe impl<const HEADER_CAP: usize> Sync for BareMetal<HEADER_CAP> {}
+impl<const HEADER_CAP: usize> Default for Static<HEADER_CAP> {
+    fn default() -> Self {
+        Self::INIT
+    }
+}
 
-impl<const HEADER_CAP: usize> BareMetal<HEADER_CAP> {
+// `memory` is guarded by `top`.
+unsafe impl<const HEADER_CAP: usize> Sync for Static<HEADER_CAP> {}
+
+impl<const HEADER_CAP: usize> Static<HEADER_CAP> {
     pub const INIT: Self = Self::new();
 
     pub const fn new() -> Self {
-        BareMetal {
+        Static {
             memory: UnsafeCell::new([0; HEADER_CAP]),
             top: AtomicPtr::<()>::new(ptr::null_mut()),
         }
@@ -78,10 +85,10 @@ impl<const HEADER_CAP: usize> BareMetal<HEADER_CAP> {
     }
 }
 
-unsafe impl<const HEADER_CAP: usize> BaseAlloc for &'static BareMetal<HEADER_CAP> {
+unsafe impl<const HEADER_CAP: usize> BaseAlloc for &'static Static<HEADER_CAP> {
     const IS_ZEROED: bool = true;
 
-    type Handle = Static;
+    type Handle = StaticHandle;
 
     type Error = AllocError;
 
