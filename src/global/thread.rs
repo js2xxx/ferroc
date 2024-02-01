@@ -21,15 +21,15 @@ macro_rules! thread_statics {
         #[thread_local]
         static mut HEAP: MaybeUninit<Heap> = MaybeUninit::uninit();
 
+        #[inline]
         pub fn with<T>(f: impl FnOnce(&Heap) -> T) -> T {
-            let ptr = INIT.as_ptr();
-            if !unsafe { ptr.read() } {
+            if !INIT.get() {
                 unsafe {
                     init();
                     let cx = CX.write(Context::new(&ARENAS));
                     HEAP.write(Heap::new(cx));
-                    ptr.write(true);
                 }
+                INIT.set(true);
             }
             f(unsafe { HEAP.assume_init_ref() })
         }

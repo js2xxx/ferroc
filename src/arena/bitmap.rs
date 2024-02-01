@@ -21,6 +21,7 @@ enum Ranges {
 }
 
 impl Bitmap {
+    #[inline]
     pub fn new(storage: &[AtomicUsize]) -> &Self {
         // SAFETY: `Bitmap` is `repr(transparent)`.
         unsafe { mem::transmute(storage) }
@@ -30,6 +31,7 @@ impl Bitmap {
     //     Self::new(&[])
     // }
 
+    #[inline]
     pub fn len(&self) -> u32 {
         self.0.len() as u32 * BITS
     }
@@ -56,6 +58,7 @@ impl Bitmap {
         }
     }
 
+    #[inline]
     fn loop_at(&self, start: usize) -> impl Iterator<Item = (usize, &AtomicUsize)> {
         let enumerate = self.0.iter().enumerate();
         enumerate.cycle().skip(start).take(self.0.len())
@@ -205,15 +208,18 @@ impl Bitmap {
         }
     }
 
+    #[inline]
     pub fn set<const VALUE: bool>(&self, range: Range<u32>) -> (bool, bool) {
         self.walk_storage(range, StorageExt::set::<VALUE>)
     }
 
+    // #[inline]
     // pub fn get(&self, range: Range<u32>) -> (bool, bool) {
     //     self.walk_storage(range, StorageExt::get)
     // }
 }
 
+#[inline]
 fn mask(range: Range<u32>) -> usize {
     debug_assert!(range.start < usize::BITS);
     debug_assert!(range.end <= usize::BITS);
@@ -253,6 +259,7 @@ impl StorageExt for AtomicUsize {
         }
     }
 
+    #[inline]
     fn set<const VALUE: bool>(&self, range: Range<u32>) -> (bool, bool) {
         let mask = mask(range);
         let prev = match VALUE {
@@ -262,6 +269,7 @@ impl StorageExt for AtomicUsize {
         (prev & mask != mask, prev & mask != 0)
     }
 
+    #[inline]
     fn get(&self, range: Range<u32>) -> (bool, bool) {
         let mask = mask(range);
         let value = self.load(Relaxed);
