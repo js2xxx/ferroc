@@ -25,18 +25,40 @@ pub const OBJ_SIZES: &[usize] = &[
     4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680, //         |
     8192, 9216, 10240, 11264, 12288, 13312, 14336, 15360, //   |
     16384, 18432, 20480, 22528, 24576, 26624, 28672, 30720, // |
-    32768, 36864, 40960, 45056, 49144, 53248, 57344, 61440, // /
+    32768, 36864, 40960, 45056, 49152, 53248, 57344, 61440, // /
     65536, // SHARD_SIZE_MAX
 ];
 
 pub(crate) const OBJ_SIZE_COUNT: usize = OBJ_SIZES.len();
 
-pub(crate) fn obj_size_index(size: usize) -> Option<usize> {
+pub fn obj_size_index_tabled(size: usize) -> Option<usize> {
     let (Ok(index) | Err(index)) = OBJ_SIZES.binary_search(&size);
     match OBJ_SIZES.get(index) {
         Some(&size) if size <= SHARD_SIZE => Some(index),
         _ => None,
     }
+}
+
+pub const fn obj_size_index(size: usize) -> Option<usize> {
+    assert!(size != 0);
+    if size > SHARD_SIZE {
+        return None;
+    }
+    let size_m1 = size - 1;
+    let msb = match (usize::BITS - size_m1.leading_zeros()).checked_sub(1) {
+        Some(msb) => msb as usize,
+        None => return Some(0), // size = 1.
+    };
+    let index = match msb {
+        0..=3 => return Some(0),
+        4..=5 => ((msb - 4) << 1) + ((size_m1 >> (msb - 1)) & 1),
+        6..=9 => ((msb - 6) << 2) + ((size_m1 >> (msb - 2)) & 3) + 4,
+        10..=17 => ((msb - 10) << 3) + ((size_m1 >> (msb - 3)) & 7) + 4 + 16,
+        18..=33 => ((msb - 18) << 4) + ((size_m1 >> (msb - 4)) & 15) + 4 + 16 + 64,
+        34..=65 => ((msb - 34) << 5) + ((size_m1 >> (msb - 5)) & 31) + 4 + 16 + 64 + 256,
+        _ => return None, // There's no machine of `usize` greater than 64-bit by far.
+    };
+    Some(index + 1)
 }
 
 pub struct Context<'arena, B: BaseAlloc> {
@@ -449,5 +471,25 @@ unsafe impl<'arena: 'cx, 'cx, B: BaseAlloc> Allocator for Heap<'arena, 'cx, B> {
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         self.deallocate(ptr, layout)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        arena::SHARD_SIZE,
+        heap::{obj_size_index, obj_size_index_tabled},
+    };
+
+    #[test]
+    fn test_osi() {
+        for s in 1..=SHARD_SIZE {
+            let calculated = obj_size_index_tabled(s);
+            let table = obj_size_index(s);
+            assert_eq!(
+                calculated, table,
+                "size {s}: calculated = {calculated:?}, table = {table:?}"
+            );
+        }
     }
 }
