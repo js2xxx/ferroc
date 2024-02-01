@@ -151,6 +151,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let count = (Slab::HEADER_COUNT * SHARD_SIZE + size).div_ceil(SLAB_SIZE);
         let count = NonZeroUsize::new(count).unwrap();
         let shard = self.cx.alloc_slab(count, SLAB_SIZE, true, stat)?;
+        shard.slab().0.inc_used();
         shard.init_huge(size, stat);
         self.huge_shards.push(shard);
 
@@ -214,6 +215,22 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             }
         };
 
+        let add_free = |free: &'arena Shard<'arena>, _stat: &mut Stat| {
+            #[cfg(feature = "stat")]
+            {
+                _stat.free_shards -= free.shard_count();
+            }
+            free.slab().0.inc_used();
+            if let Some(next) = free.init(OBJ_SIZES[index], _stat) {
+                self.cx.free_shards.push(next);
+                #[cfg(feature = "stat")]
+                {
+                    _stat.free_shards += next.shard_count();
+                }
+            }
+            list.push(free);
+        };
+
         if !list.is_empty()
             && let Some(block) = pop_from_list(stat)
         {
@@ -221,19 +238,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
 
         if let Some(free) = self.cx.free_shards.pop() {
-            #[cfg(feature = "stat")]
-            {
-                stat.free_shards -= free.shard_count();
-            }
             // 1. Try to pop from the free shards;
-            if let Some(next) = free.init(OBJ_SIZES[index], stat) {
-                self.cx.free_shards.push(next);
-                #[cfg(feature = "stat")]
-                {
-                    stat.free_shards += next.shard_count();
-                }
-            }
-            list.push(free);
+            add_free(free, stat);
         } else {
             // 2. Try to collect potentially unfull shards.
             let unfulled = self.full_shards.drain(|shard| {
@@ -253,14 +259,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 let free = self
                     .cx
                     .alloc_slab(NonZeroUsize::MIN, SLAB_SIZE, false, stat)?;
-                if let Some(next) = free.init(OBJ_SIZES[index], stat) {
-                    self.cx.free_shards.push(next);
-                    #[cfg(feature = "stat")]
-                    {
-                        stat.free_shards += next.shard_count();
-                    }
-                }
-                list.push(free);
+                add_free(free, stat);
             }
         }
 

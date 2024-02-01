@@ -1,6 +1,7 @@
 use std::{
-    alloc::Layout,
+    alloc::{GlobalAlloc, Layout},
     iter,
+    marker::PhantomData,
     ops::Range,
     ptr::NonNull,
     thread,
@@ -14,28 +15,28 @@ const THREAD_COUNT: usize = 24;
 const ROUND: usize = ALL_ROUND / THREAD_COUNT;
 const BLOCK_SIZES: Range<usize> = 1..1000;
 
-#[global_allocator]
-static FERROC: Ferroc = Ferroc;
-
 fn main() {
-    println!("{:?}", do_bench());
+    println!("ferroc: {:?}", do_bench(&Ferroc));
 }
 
-fn do_bench() -> Duration {
+fn do_bench<A: GlobalAlloc + Sync>(a: &A) -> Duration {
     if THREAD_COUNT == 1 {
-        return bench_one();
+        return bench_one(a);
     }
-    let threads: Vec<_> = (0..THREAD_COUNT)
-        .map(|_| thread::spawn(bench_one))
-        .collect();
-    threads
-        .into_iter()
-        .map(|t| t.join().unwrap())
-        .sum::<Duration>()
-        / THREAD_COUNT.try_into().unwrap()
+
+    thread::scope(|s| {
+        let threads: Vec<_> = (0..THREAD_COUNT)
+            .map(|_| s.spawn(|| bench_one(a)))
+            .collect();
+        threads
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .sum::<Duration>()
+            / THREAD_COUNT.try_into().unwrap()
+    })
 }
 
-fn bench_one() -> Duration {
+fn bench_one<A: GlobalAlloc>(alloc: &A) -> Duration {
     let mut memory: Vec<_> = iter::repeat_with(|| Allocation::UNINIT)
         .take(ROUND)
         .collect();
@@ -57,7 +58,7 @@ fn bench_one() -> Duration {
                     _ => 1,
                 };
                 for _ in 0..iterations {
-                    memory[index] = unsafe { allocate_one(size) };
+                    memory[index] = unsafe { allocate_one(size, alloc) };
                     index += 1;
 
                     if index == save_start {
@@ -76,8 +77,12 @@ fn bench_one() -> Duration {
                             save_end = ROUND;
                         }
 
-                        memory[..save_start].iter_mut().for_each(|a| a.deallocate());
-                        memory[save_end..].iter_mut().for_each(|a| a.deallocate());
+                        memory[..save_start]
+                            .iter_mut()
+                            .for_each(|a| a.deallocate(alloc));
+                        memory[save_end..]
+                            .iter_mut()
+                            .for_each(|a| a.deallocate(alloc));
 
                         if index == save_start {
                             index = save_end;
@@ -89,41 +94,47 @@ fn bench_one() -> Duration {
 
             size_base = size_base * 3 / 2 + 1;
         }
-        memory[..index].iter_mut().for_each(|a| a.deallocate());
+        memory[..index].iter_mut().for_each(|a| a.deallocate(alloc));
         if index < save_start {
             memory[save_start..save_end]
                 .iter_mut()
-                .for_each(|a| a.deallocate());
+                .for_each(|a| a.deallocate(alloc));
         }
     }
 
     start.elapsed()
 }
 
-unsafe fn allocate_one(size: usize) -> Allocation {
+unsafe fn allocate_one<A: GlobalAlloc>(size: usize, a: &A) -> Allocation<A> {
     let layout = Layout::array::<u8>(size).unwrap();
-    let ptr = Ferroc.allocate(layout).expect("out of memory");
+    let ptr = NonNull::new(a.alloc(layout)).expect("out of memory");
 
     ptr.cast::<u8>().as_ptr().write(0);
     ptr.cast::<u8>().as_ptr().add(size - 1).write(0);
 
-    Allocation { ptr: Some(ptr.cast()), layout }
+    Allocation {
+        ptr: Some(ptr.cast()),
+        layout,
+        marker: PhantomData,
+    }
 }
 
-struct Allocation {
+struct Allocation<A> {
     ptr: Option<NonNull<u8>>,
     layout: Layout,
+    marker: PhantomData<A>,
 }
 
-impl Allocation {
-    const UNINIT: Allocation = Allocation {
+impl<A: GlobalAlloc> Allocation<A> {
+    const UNINIT: Self = Allocation {
         ptr: None,
         layout: Layout::new::<()>(),
+        marker: PhantomData,
     };
 
-    fn deallocate(&mut self) {
+    fn deallocate(&mut self, a: &A) {
         if let Some(ptr) = self.ptr.take() {
-            unsafe { Ferroc.deallocate(ptr, self.layout) };
+            unsafe { a.dealloc(ptr.as_ptr(), self.layout) };
         }
     }
 }
