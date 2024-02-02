@@ -5,7 +5,7 @@ pub mod thread;
 #[macro_export]
 #[doc(hidden)]
 macro_rules! config_stat {
-    () => {
+    ($vis:vis) => {
         $vis fn stat(&self) -> $crate::stat::Stat {
             thread::with(|heap| heap.stat())
         }
@@ -16,7 +16,7 @@ macro_rules! config_stat {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! config_stat {
-    () => {};
+    ($vis:vis) => {};
 }
 
 #[macro_export]
@@ -49,7 +49,7 @@ macro_rules! config_inner {
                 thread::with(|heap| heap.collect(force))
             }
 
-            $crate::config_stat!();
+            $crate::config_stat!($vis);
 
             $vis fn allocate(&self, layout: core::alloc::Layout) -> Result<core::ptr::NonNull<[u8]>, Error> {
                 thread::with(|heap| heap.allocate(layout))

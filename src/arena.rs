@@ -169,12 +169,20 @@ impl<B: BaseAlloc> Arena<B> {
         thread_id: u64,
         count: usize,
         align: usize,
-        is_huge: bool,
+        is_large_or_huge: bool,
     ) -> Option<SlabRef> {
         debug_assert!(align <= SLAB_SIZE);
         let ptr = self.allocate_slices(count)?;
         // SAFETY: The fresh allocation is aligned to `SLAB_SIZE`.
-        Some(unsafe { Slab::init(ptr, thread_id, self.arena_id, is_huge, B::IS_ZEROED) })
+        Some(unsafe {
+            Slab::init(
+                ptr,
+                thread_id,
+                self.arena_id,
+                is_large_or_huge,
+                B::IS_ZEROED,
+            )
+        })
     }
 
     /// # Safety
@@ -285,20 +293,21 @@ impl<B: BaseAlloc> Arenas<B> {
         thread_id: u64,
         count: NonZeroUsize,
         align: usize,
-        is_huge: bool,
+        is_large_or_huge: bool,
     ) -> Result<SlabRef, Error<B>> {
         let count = count.get()/* .max(self.slab_count.load(Relaxed).isqrt()) */;
 
         self.collect_abandoned();
         let ret = match self
             .arenas(false)
-            .find_map(|(_, arena)| arena.allocate(thread_id, count, align, is_huge))
+            .find_map(|(_, arena)| arena.allocate(thread_id, count, align, is_large_or_huge))
         {
             Some(slab) => slab,
             None => {
                 let arena = Arena::new(self.base.clone(), count, Some(align), false)?;
                 let arena = self.push_arena(arena)?;
-                arena.allocate(thread_id, count, align, is_huge).unwrap()
+                let res = arena.allocate(thread_id, count, align, is_large_or_huge);
+                res.unwrap()
             }
         };
         // self.slab_count.fetch_add(count, Relaxed);

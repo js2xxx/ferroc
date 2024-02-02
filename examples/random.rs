@@ -2,7 +2,6 @@ use std::{
     alloc::{GlobalAlloc, Layout},
     iter,
     marker::PhantomData,
-    ops::Range,
     ptr::NonNull,
     thread,
     time::{Duration, Instant},
@@ -11,12 +10,27 @@ use std::{
 use ferroc::Ferroc;
 
 const ALL_ROUND: usize = 10000;
-const THREAD_COUNT: usize = 24;
+const THREAD_COUNT: usize = 6;
 const ROUND: usize = ALL_ROUND / THREAD_COUNT;
-const BLOCK_SIZES: Range<usize> = 1..1000;
+
+const BENCH_ARGS: &[BenchArg] = &[
+    BenchArg { size: 8, count: 1000 },
+    BenchArg { size: 16, count: 5000 },
+    BenchArg { size: 48, count: 1000 },
+    BenchArg { size: 72, count: 100 },
+    BenchArg { size: 148, count: 100 },
+    BenchArg { size: 200, count: 100 },
+    BenchArg { size: 520, count: 10 },
+    BenchArg { size: 1056, count: 5 },
+    BenchArg { size: 4096, count: 3 },
+    BenchArg { size: 9162, count: 1 },
+    BenchArg { size: 34562, count: 1 },
+    BenchArg { size: 168524, count: 1 },
+];
 
 fn main() {
     println!("ferroc: {:?}", do_bench(&Ferroc));
+    println!("system: {:?}", do_bench(&std::alloc::System));
 }
 
 fn do_bench<A: GlobalAlloc + Sync>(a: &A) -> Duration {
@@ -36,6 +50,11 @@ fn do_bench<A: GlobalAlloc + Sync>(a: &A) -> Duration {
     })
 }
 
+struct BenchArg {
+    size: usize,
+    count: usize,
+}
+
 fn bench_one<A: GlobalAlloc>(alloc: &A) -> Duration {
     let mut memory: Vec<_> = iter::repeat_with(|| Allocation::UNINIT)
         .take(ROUND)
@@ -47,59 +66,47 @@ fn bench_one<A: GlobalAlloc>(alloc: &A) -> Duration {
     let start = Instant::now();
 
     for _ in 0..ROUND {
-        let mut size_base = BLOCK_SIZES.start;
-        while size_base < BLOCK_SIZES.end {
-            let mut size = size_base;
-            while size > 0 {
-                let iterations = match size {
-                    ..=99 => 250,
-                    100..=999 => 50,
-                    1000..=9999 => 10,
-                    _ => 1,
-                };
-                for _ in 0..iterations {
-                    memory[index] = unsafe { allocate_one(size, alloc) };
-                    index += 1;
+        for &BenchArg { size, count } in BENCH_ARGS {
+            for _ in 0..count {
+                memory[index] = unsafe { allocate_one(size, alloc) };
+                index += 1;
+
+                if index == save_start {
+                    index = save_end;
+                }
+
+                if index == ROUND {
+                    index = 0;
+
+                    save_start = save_end;
+                    if save_start >= ROUND {
+                        save_start = 0;
+                    }
+                    save_end = save_start + ROUND / 5;
+                    if save_end > ROUND {
+                        save_end = ROUND;
+                    }
+
+                    memory[..save_start]
+                        .iter_mut()
+                        .for_each(|a| a.deallocate(alloc));
+                    memory[save_end..]
+                        .iter_mut()
+                        .for_each(|a| a.deallocate(alloc));
 
                     if index == save_start {
                         index = save_end;
                     }
-
-                    if index == ROUND {
-                        index = 0;
-
-                        save_start = save_end;
-                        if save_start >= ROUND {
-                            save_start = 0;
-                        }
-                        save_end = save_start + ROUND / 5;
-                        if save_end > ROUND {
-                            save_end = ROUND;
-                        }
-
-                        memory[..save_start]
-                            .iter_mut()
-                            .for_each(|a| a.deallocate(alloc));
-                        memory[save_end..]
-                            .iter_mut()
-                            .for_each(|a| a.deallocate(alloc));
-
-                        if index == save_start {
-                            index = save_end;
-                        }
-                    }
                 }
-                size >>= 1;
             }
+        }
+    }
 
-            size_base = size_base * 3 / 2 + 1;
-        }
-        memory[..index].iter_mut().for_each(|a| a.deallocate(alloc));
-        if index < save_start {
-            memory[save_start..save_end]
-                .iter_mut()
-                .for_each(|a| a.deallocate(alloc));
-        }
+    memory[..index].iter_mut().for_each(|a| a.deallocate(alloc));
+    if index < save_start {
+        memory[save_start..save_end]
+            .iter_mut()
+            .for_each(|a| a.deallocate(alloc));
     }
 
     start.elapsed()

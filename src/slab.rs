@@ -69,7 +69,7 @@ impl<'a> SlabRef<'a> {
 pub(crate) struct Slab<'a> {
     pub(super) thread_id: u64,
     pub(super) arena_id: usize,
-    is_huge: bool,
+    pub(super) is_large_or_huge: bool,
     size: usize,
     used: Cell<usize>,
     abandoned: Cell<usize>,
@@ -140,7 +140,7 @@ impl<'a> Slab<'a> {
     /// `ptr` must be a pointer within the range of `this`.
     unsafe fn shard_meta(this: NonNull<Self>, ptr: NonNull<()>) -> (NonNull<Shard<'a>>, usize) {
         let shards = ptr::addr_of!((*this.as_ptr()).shards);
-        let index = if !unsafe { ptr::addr_of!((*this.as_ptr()).is_huge).read() } {
+        let index = if !unsafe { ptr::addr_of!((*this.as_ptr()).is_large_or_huge).read() } {
             (ptr.addr().get() - this.addr().get()) / SHARD_SIZE
         } else {
             Self::HEADER_COUNT
@@ -191,7 +191,7 @@ impl<'a> Slab<'a> {
         ptr: NonNull<[u8]>,
         thread_id: u64,
         arena_id: usize,
-        is_huge: bool,
+        is_large_or_huge: bool,
         free_is_zero: bool,
     ) -> SlabRef<'a> {
         let slab = ptr.cast::<Self>().as_ptr();
@@ -201,7 +201,7 @@ impl<'a> Slab<'a> {
 
         addr_of_mut!((*slab).thread_id).write(thread_id);
         addr_of_mut!((*slab).arena_id).write(arena_id);
-        addr_of_mut!((*slab).is_huge).write(is_huge);
+        addr_of_mut!((*slab).is_large_or_huge).write(is_large_or_huge);
         addr_of_mut!((*slab).size).write(ptr.len());
         addr_of_mut!((*slab).used).write(Cell::new(0));
         addr_of_mut!((*slab).abandoned).write(Cell::new(0));
@@ -427,22 +427,39 @@ impl<'a> Shard<'a> {
         self.extend_count(limit.min(delta))
     }
 
-    pub(crate) fn init_huge(&self, size: usize, _stat: &mut Stat) {
-        debug_assert!(size > SHARD_SIZE);
+    pub(crate) fn init_large_or_huge(
+        &self,
+        obj_size: usize,
+        slab_count: NonZeroUsize,
+        _stat: &mut Stat,
+    ) {
+        debug_assert!(obj_size > SHARD_SIZE);
 
         #[cfg(feature = "stat")]
         {
             _stat.shards += 1;
         }
 
-        self.obj_size.store(size, Relaxed);
-        self.cap_limit.set(1);
+        self.obj_size.store(obj_size, Relaxed);
+        let usable_size = SLAB_SIZE * slab_count.get() - SHARD_SIZE * Slab::HEADER_COUNT;
+        self.cap_limit.set(usable_size / obj_size);
         self.has_aligned.store(false, Relaxed);
-        self.extend_count(1);
+
+        self.capacity.set(0);
+        self.free.set(None);
+        self.local_free.set(None);
+        self.used.set(0);
+
+        self.extend();
     }
 
     pub(crate) fn init(&self, obj_size: usize, _stat: &mut Stat) -> Option<&'a Shard<'a>> {
-        debug_assert!(obj_size <= SHARD_SIZE);
+        debug_assert!(obj_size <= SLAB_SIZE / 2);
+
+        if obj_size > SHARD_SIZE {
+            self.init_large_or_huge(obj_size, NonZeroUsize::MIN, _stat);
+            return None;
+        }
 
         let (slab, index) = self.slab();
         #[cfg(feature = "stat")]
