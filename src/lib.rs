@@ -70,8 +70,8 @@ mod test {
     #[test]
     fn direct() {
         let layout = Layout::from_size_align(12345, SLAB_SIZE * 2).unwrap();
-        let ptr = FERROC.allocate(layout).unwrap();
-        unsafe { FERROC.deallocate(ptr.cast(), layout) }
+        let ptr = Ferroc.allocate(layout).unwrap();
+        unsafe { Ferroc.deallocate(ptr.cast(), layout) }
     }
 
     #[test]
