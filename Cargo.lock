@@ -131,6 +131,7 @@ name = "ferroc"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "fastrand",
  "libc",
  "region",
 ]

@@ -21,6 +21,9 @@ stat = []
 libc = {version = "0.2", optional = true}
 region = {version = "3.0", optional = true}
 
+[dev-dependencies]
+fastrand = "2.0"
+
 [build-dependencies]
 cbindgen = {version = "0.24", optional = true}
 
