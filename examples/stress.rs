@@ -1,6 +1,12 @@
 #![feature(allocator_api)]
 
-use std::{alloc::Allocator, iter, mem, sync::Mutex, thread, time::Instant};
+use std::{
+    alloc::Allocator,
+    iter, mem,
+    sync::Mutex,
+    thread,
+    time::{Duration, Instant},
+};
 
 use ferroc::Ferroc;
 
@@ -11,26 +17,27 @@ const ITER: usize = 25;
 const TRANSFER_COUNT: usize = 1000;
 
 fn main() {
-    let start = Instant::now();
-    do_bench(&Ferroc);
-    println!("{:?}", start.elapsed());
+    println!("ferroc: {:?}", do_bench(&Ferroc));
+    println!("system: {:?}", do_bench(&std::alloc::System));
 }
 
-fn do_bench<A: Allocator + Send + Sync>(a: &A) {
+fn do_bench<A: Allocator + Send + Sync>(a: &A) -> Duration {
     let mut transfer: Vec<_> = iter::repeat_with(|| Mutex::new(None))
         .take(TRANSFER_COUNT)
         .collect();
+    let start = Instant::now();
     for _ in 0..ITER {
         thread::scope(|s| {
             let transfer = &transfer;
-            let threads: Vec<_> = (0..THREADS)
-                .map(|tid| s.spawn(move || bench_one(tid, transfer, a)))
-                .collect();
-            threads.into_iter().for_each(|t| t.join().unwrap());
+            for tid in 0..THREADS {
+                s.spawn(move || bench_one(tid, transfer, a));
+            }
         });
         (transfer.iter_mut().filter(|_| probably(50)))
             .for_each(|t| drop(t.get_mut().unwrap().take()))
     }
+    drop(transfer);
+    start.elapsed()
 }
 
 fn bench_one<'a, A: Allocator>(tid: usize, transfer: &[Mutex<Option<Items<&'a A>>>], a: &'a A) {
