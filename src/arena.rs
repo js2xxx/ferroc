@@ -164,6 +164,14 @@ impl<B: BaseAlloc> Arena<B> {
         ))
     }
 
+    #[cfg(debug_assertions)]
+    fn check_ptr(&self, ptr: NonNull<u8>) -> bool {
+        let addr = ptr.as_ptr().addr();
+        let (origin, size) = self.chunk.pointer().to_raw_parts();
+        let origin = origin.as_ptr().addr();
+        (origin..origin + size).contains(&addr)
+    }
+
     fn allocate(
         &self,
         thread_id: u64,
@@ -226,22 +234,36 @@ impl<B: BaseAlloc> Arenas<B> {
     }
 
     fn push_arena<'a>(&'a self, arena: &'a mut Arena<B>) -> Result<&'a Arena<B>, Error<B>> {
-        let index = self.arena_count.fetch_add(1, AcqRel);
-        if index < MAX_ARENAS {
-            arena.arena_id = index + 1;
-            self.arenas[index].store(arena, Release);
-            Ok(arena)
-        } else if let Some(index) = self.arenas.iter().position(|slot| {
-            slot.compare_exchange(ptr::null_mut(), arena, AcqRel, Acquire)
-                .is_ok()
-        }) {
-            arena.arena_id = index + 1;
-            Ok(arena)
-        } else {
-            self.arena_count.fetch_sub(1, AcqRel);
-            // SAFETY: The arena is freshly allocated.
-            unsafe { Arena::drop(arena.into()) };
-            Err(Error::ArenaExhausted)
+        let mut index = self.arena_count.load(Relaxed);
+        loop {
+            break if index < MAX_ARENAS {
+                if let Err(i) = self
+                    .arena_count
+                    .compare_exchange(index, index + 1, AcqRel, Acquire)
+                {
+                    index = i;
+                    continue;
+                }
+                if self.arenas[index]
+                    .compare_exchange(ptr::null_mut(), arena, AcqRel, Acquire)
+                    .is_err()
+                {
+                    index = self.arena_count.load(Relaxed);
+                    continue;
+                }
+                arena.arena_id = index + 1;
+                Ok(arena)
+            } else if let Some(index) = self.arenas.iter().position(|slot| {
+                slot.compare_exchange(ptr::null_mut(), arena, AcqRel, Acquire)
+                    .is_ok()
+            }) {
+                arena.arena_id = index + 1;
+                Ok(arena)
+            } else {
+                // SAFETY: The arena is freshly allocated.
+                unsafe { Arena::drop(arena.into()) };
+                Err(Error::ArenaExhausted)
+            };
         }
     }
 
@@ -270,11 +292,15 @@ impl<B: BaseAlloc> Arenas<B> {
         }
     }
 
-    fn arenas(&self, is_exclusive: bool) -> impl Iterator<Item = (usize, &Arena<B>)> {
+    fn all_arenas(&self) -> impl Iterator<Item = (usize, &Arena<B>)> {
         let iter = self.arenas[..self.arena_count.load(Acquire)].iter();
         // SAFETY: We check the nullity of the pointers.
         iter.enumerate()
             .filter_map(|(index, arena)| Some((index, unsafe { arena.load(Acquire).as_ref() }?)))
+    }
+
+    fn arenas(&self, is_exclusive: bool) -> impl Iterator<Item = (usize, &Arena<B>)> {
+        self.all_arenas()
             .filter(move |(_, arena)| arena.is_exclusive == is_exclusive)
     }
 
@@ -286,6 +312,11 @@ impl<B: BaseAlloc> Arenas<B> {
         let arena = Arena::new_chunk(self.base.clone(), chunk)?;
         self.push_arena(arena)?;
         Ok(())
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn check_ptr(&self, ptr: NonNull<u8>) -> bool {
+        self.all_arenas().any(|(_, arena)| arena.check_ptr(ptr))
     }
 
     pub(crate) fn allocate(
