@@ -13,6 +13,7 @@ use self::bitmap::Bitmap;
 use crate::{
     base::{BaseAlloc, Chunk},
     slab::{Slab, SlabRef},
+    track,
 };
 
 const BYTE_WIDTH: usize = u8::BITS as usize;
@@ -373,6 +374,7 @@ impl<B: BaseAlloc> Arenas<B> {
             arena.chunk.pointer().cast(),
             layout.size(),
         ))
+        .inspect(|&ptr| track::allocate(ptr, 0, false))
     }
 
     pub fn layout_of_direct(&self, ptr: NonNull<u8>) -> Option<Layout> {
@@ -393,6 +395,7 @@ impl<B: BaseAlloc> Arenas<B> {
             .arenas(true)
             .find(|(_, arena)| arena.chunk.pointer().cast() == ptr)
         {
+            track::deallocate(ptr, 0);
             let arena = self.arenas[index].swap(ptr::null_mut(), AcqRel);
             debug_assert!(!arena.is_null());
             // SAFETY: `arena` is exclusive.

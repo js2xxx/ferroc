@@ -27,6 +27,7 @@ pub mod heap;
 mod slab;
 #[cfg(feature = "stat")]
 mod stat;
+mod track;
 
 #[cfg(not(feature = "stat"))]
 type Stat = ();

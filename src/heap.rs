@@ -12,7 +12,7 @@ use crate::{
     arena::{Arenas, Error, SHARD_SIZE, SLAB_SIZE},
     base::BaseAlloc,
     slab::{BlockRef, Shard, ShardList, Slab},
-    Stat,
+    track, Stat,
 };
 
 pub const OBJ_SIZE_COUNT: usize = obj_size_index(ObjSizeType::LARGE_MAX) + 1;
@@ -166,7 +166,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
     }
 
-    fn pop_huge(
+    fn pop_huge_untracked(
         &self,
         size: usize,
         stat: &mut Stat,
@@ -193,7 +193,14 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         Ok(NonNull::from_raw_parts(block.into_raw(), size))
     }
 
-    fn pop(
+    #[inline]
+    fn pop_huge(&self, size: usize, stat: &mut Stat) -> Result<NonNull<[u8]>, Error<B>> {
+        let ptr = self.pop_huge_untracked(size, stat, false)?;
+        track::allocate(ptr, 0, false);
+        Ok(ptr)
+    }
+
+    fn pop_untracked(
         &self,
         size: usize,
         stat: &mut Stat,
@@ -201,7 +208,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     ) -> Result<NonNull<[u8]>, Error<B>> {
         let ty = match obj_size_type(size) {
             ty @ (Small | Medium | Large) => ty,
-            Huge => return self.pop_huge(size, stat, set_align),
+            Huge => return self.pop_huge_untracked(size, stat, set_align),
         };
         let index = obj_size_index(size);
 
@@ -222,6 +229,13 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         };
 
         Ok(NonNull::from_raw_parts(block.into_raw(), size))
+    }
+
+    #[inline]
+    fn pop(&self, size: usize, stat: &mut Stat) -> Result<NonNull<[u8]>, Error<B>> {
+        let ptr = self.pop_untracked(size, stat, false)?;
+        track::allocate(ptr, 0, false);
+        Ok(ptr)
     }
 
     #[cold]
@@ -316,7 +330,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     }
 
     fn pop_aligned(&self, layout: Layout, stat: &mut Stat) -> Result<NonNull<[u8]>, Error<B>> {
-        let ptr = match obj_size_type(layout.size()) {
+        Ok(match obj_size_type(layout.size()) {
             Small | Medium | Large
                 if let index = obj_size_index(layout.size())
                     && let Some(shard) = self.shards[index].current()
@@ -327,22 +341,21 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                     stat.normal_count[index] += 1;
                     stat.normal_size += obj_size(index);
                 }
-                block.into_raw()
+                let ptr = NonNull::from_raw_parts(block.into_raw(), layout.size());
+                track::allocate(ptr, 0, false);
+                ptr
             }
-            Huge if layout.align() <= SHARD_SIZE => {
-                return self.pop_huge(layout.size(), stat, false)
-            }
+            Huge if layout.align() <= SHARD_SIZE => return self.pop_huge(layout.size(), stat),
             _ if layout.align() < SLAB_SIZE => {
-                let ptr = self.pop(layout.size() + layout.align() - 1, stat, true)?;
-                ptr.cast().map_addr(|addr| unsafe {
-                    NonZeroUsize::new_unchecked(
-                        (addr.get() + layout.align() - 1) & !(layout.align() - 1),
-                    )
-                })
+                let ptr = self.pop_untracked(layout.size() + layout.align() - 1, stat, true)?;
+                let addr = (ptr.addr().get() + layout.align() - 1) & !(layout.align() - 1);
+                let ptr = ptr.cast().with_addr(NonZeroUsize::new(addr).unwrap());
+                let ptr = NonNull::from_raw_parts(ptr, layout.size());
+                track::allocate(ptr, 0, false);
+                ptr
             }
             _ => return self.cx.arena.allocate_direct(layout),
-        };
-        Ok(NonNull::from_raw_parts(ptr, layout.size()))
+        })
     }
 
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<B>> {
@@ -358,7 +371,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         #[cfg(not(feature = "stat"))]
         let mut stat = ();
         if layout.size() & (layout.align() - 1) == 0 {
-            return self.pop(layout.size(), &mut stat, false);
+            return self.pop(layout.size(), &mut stat);
         }
         self.pop_aligned(layout, &mut stat)
     }
@@ -433,6 +446,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let Some(slab) = (unsafe { Slab::from_ptr(ptr) }) else {
             return;
         };
+        track::deallocate(ptr, 0);
+
         let thread_id = unsafe { ptr::addr_of!((*slab.as_ptr()).thread_id).read() };
         // SAFETY: `ptr` is in `slab`.
         let (shard, block, obj_size) = unsafe { Slab::shard_infos(slab, ptr.cast()) };
