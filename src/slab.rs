@@ -17,7 +17,8 @@ use self::{
     cell_link::{CellLink, CellLinked, CellList},
 };
 use crate::{
-    arena::{SHARD_COUNT, SHARD_SIZE, SLAB_SIZE},
+    arena::{Error, SHARD_COUNT, SHARD_SIZE, SLAB_SIZE},
+    base::BaseAlloc,
     Stat,
 };
 
@@ -234,6 +235,7 @@ impl<'a> Slab<'a> {
 pub(crate) struct Shard<'a> {
     link: CellLink<'a, Self>,
     shard_count: Cell<usize>,
+    is_committed: Cell<bool>,
 
     pub(crate) obj_size: AtomicUsize,
     cap_limit: Cell<usize>,
@@ -414,12 +416,13 @@ impl<'a> Shard<'a> {
         self.extend_count(limit.min(delta))
     }
 
-    pub(crate) fn init_large_or_huge(
+    pub(crate) fn init_large_or_huge<B: BaseAlloc>(
         &self,
         obj_size: usize,
         slab_count: NonZeroUsize,
+        base: &B,
         _stat: &mut Stat,
-    ) {
+    ) -> Result<(), Error<B>> {
         debug_assert!(obj_size > SHARD_SIZE);
 
         #[cfg(feature = "stat")]
@@ -437,15 +440,30 @@ impl<'a> Shard<'a> {
         self.local_free.set(None);
         self.used.set(0);
 
+        if !self.is_committed.replace(true) {
+            let (slab, index) = self.slab();
+            // SAFETY: `slab` is valid.
+            let area = unsafe { Slab::shard_area(slab.into(), index) };
+            base.commit(NonNull::from_raw_parts(area.cast(), usable_size))
+                .map_err(Error::Commit)?;
+        }
+
         self.extend();
+
+        Ok(())
     }
 
-    pub(crate) fn init(&self, obj_size: usize, _stat: &mut Stat) -> Option<&'a Shard<'a>> {
+    pub(crate) fn init<B: BaseAlloc>(
+        &self,
+        obj_size: usize,
+        base: &B,
+        _stat: &mut Stat,
+    ) -> Result<Option<&'a Shard<'a>>, Error<B>> {
         debug_assert!(obj_size <= SLAB_SIZE / 2);
 
         if obj_size > SHARD_SIZE {
-            self.init_large_or_huge(obj_size, NonZeroUsize::MIN, _stat);
-            return None;
+            self.init_large_or_huge(obj_size, NonZeroUsize::MIN, base, _stat)?;
+            return Ok(None);
         }
 
         let (slab, index) = self.slab();
@@ -454,14 +472,22 @@ impl<'a> Shard<'a> {
             _stat.shards += 1;
         }
 
-        let shard_count = self.shard_count.replace(1) - 1;
-        let next_shard = (shard_count > 0)
-            .then(|| &slab.shards[index + 1])
-            .inspect(|next_shard| next_shard.shard_count.set(shard_count));
+        if !self.is_committed.replace(true) {
+            // SAFETY: `slab` is valid.
+            let area = unsafe { Slab::shard_area(slab.into(), index) };
+            base.commit(NonNull::from_raw_parts(area.cast(), SHARD_SIZE))
+                .map_err(Error::Commit)?;
+        }
 
         let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
         self.cap_limit.set(SHARD_SIZE / obj_size);
         self.has_aligned.store(false, Relaxed);
+
+        let shard_count = self.shard_count.replace(1) - 1;
+        debug_assert!(shard_count + index < SHARD_COUNT);
+        let next_shard = (shard_count > 0)
+            .then(|| &slab.shards[index + 1])
+            .inspect(|next_shard| next_shard.shard_count.set(shard_count));
 
         if old_obj_size != obj_size {
             self.capacity.set(0);
@@ -474,7 +500,7 @@ impl<'a> Shard<'a> {
             self.extend();
         }
 
-        next_shard
+        Ok(next_shard)
     }
 
     pub(crate) fn fini(&self, _stat: &mut Stat) -> Result<Option<&Self>, SlabRef> {

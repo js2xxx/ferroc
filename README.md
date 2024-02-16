@@ -71,11 +71,12 @@ fn main() {
 - `"global"`: Global allocator instantiation macros `config!` and `config_mod!` (inner thread local statics are leaked by default);
 - `"libc"`: `libc` dependency (currently required by `pthread` option in `config*!` if you want a `pthread` thread-local destructor);
 - `"default"`: The default global allocator `Ferroc` provided by `MmapAlloc` and `pthread` thread-local destructor (consisting of all the features above);
-- `"c"`: `fe_*` C functions for C/C++ targets and a generated C/C++ header `"ferroc.h"` in the root directory, and replacement for default allocator functions such as `malloc` if `--cfg sys_alloc` is specified.
+- `"c"`: `fe_*` C functions for C/C++ targets and a generated C/C++ header `"ferroc.h"` in the root directory, and replacement for default allocator functions such as `malloc` if `--cfg sys_alloc` is specified;
+- `"track-valgrind"`: Valgrind memory tracking support based on [`crabgrind`](https://github.com/2dav/crabgrind).
 
 ## Caveats
 
-This crate only supports the latest nightly Rust compiler currently and utilizes many unstable  features. Use it with care.
+This crate only supports the latest nightly Rust compiler currently and utilizes many unstable features. Use it with care.
 
 ### License
 

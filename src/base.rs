@@ -22,13 +22,13 @@ pub struct StaticHandle;
 ///
 /// `allocate` must return a valid & free memory block containing `layout`,
 /// zeroed if `IS_ZEROED`, if possible.
-pub unsafe trait BaseAlloc: Clone {
+pub unsafe trait BaseAlloc: Sized {
     const IS_ZEROED: bool;
 
     type Handle;
     type Error;
 
-    fn allocate(self, layout: Layout) -> Result<Chunk<Self>, Self::Error>;
+    fn allocate(&self, layout: Layout, commit: bool) -> Result<Chunk<Self>, Self::Error>;
 
     /// # Safety
     ///
@@ -36,6 +36,22 @@ pub unsafe trait BaseAlloc: Clone {
     ///   `layout`, previously allocated by this allocator.
     /// - `chunk` must not be used any longer after the deallocation.
     unsafe fn deallocate(chunk: &mut Chunk<Self>);
+
+    fn commit(&self, ptr: NonNull<[u8]>) -> Result<(), Self::Error> {
+        let _ = ptr;
+        Ok(())
+    }
+
+    /// # Errors
+    ///
+    /// This function will return an error if the decommission failed.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a block of memory whose content is no longer used.
+    unsafe fn decommit(&self, ptr: NonNull<[u8]>) {
+        let _ = ptr;
+    }
 }
 
 // SAFETY: Any `Allocator` is a valid `BaseAlloc`.
@@ -47,9 +63,9 @@ unsafe impl<A: Allocator + Clone> BaseAlloc for A {
 
     type Error = AllocError;
 
-    fn allocate(self, layout: Layout) -> Result<Chunk<Self>, Self::Error> {
-        let ptr = Allocator::allocate(&self, layout)?;
-        Ok(unsafe { Chunk::new(ptr.cast(), layout, ManuallyDrop::new(self)) })
+    fn allocate(&self, layout: Layout, _commit: bool) -> Result<Chunk<Self>, Self::Error> {
+        let ptr = Allocator::allocate(self, layout)?;
+        Ok(unsafe { Chunk::new(ptr.cast(), layout, ManuallyDrop::new(self.clone())) })
     }
 
     unsafe fn deallocate(chunk: &mut Chunk<Self>) {
@@ -69,9 +85,9 @@ unsafe impl<A: Allocator + Clone> BaseAlloc for Zeroed<A> {
 
     type Error = AllocError;
 
-    fn allocate(self, layout: Layout) -> Result<Chunk<Self>, Self::Error> {
+    fn allocate(&self, layout: Layout, _commit: bool) -> Result<Chunk<Self>, Self::Error> {
         let ptr = Allocator::allocate_zeroed(&self.0, layout)?;
-        Ok(unsafe { Chunk::new(ptr.cast(), layout, ManuallyDrop::new(self.0)) })
+        Ok(unsafe { Chunk::new(ptr.cast(), layout, ManuallyDrop::new(self.0.clone())) })
     }
 
     unsafe fn deallocate(chunk: &mut Chunk<Self>) {
