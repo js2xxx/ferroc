@@ -444,7 +444,7 @@ impl<'a> Shard<'a> {
             let (slab, index) = self.slab();
             // SAFETY: `slab` is valid.
             let area = unsafe { Slab::shard_area(slab.into(), index) };
-            base.commit(NonNull::from_raw_parts(area.cast(), usable_size))
+            unsafe { base.commit(NonNull::from_raw_parts(area.cast(), usable_size)) }
                 .map_err(Error::Commit)?;
         }
 
@@ -475,7 +475,7 @@ impl<'a> Shard<'a> {
         if !self.is_committed.replace(true) {
             // SAFETY: `slab` is valid.
             let area = unsafe { Slab::shard_area(slab.into(), index) };
-            base.commit(NonNull::from_raw_parts(area.cast(), SHARD_SIZE))
+            unsafe { base.commit(NonNull::from_raw_parts(area.cast(), SHARD_SIZE)) }
                 .map_err(Error::Commit)?;
         }
 

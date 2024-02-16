@@ -1,3 +1,7 @@
+//! The module of the arena collection.
+//!
+//! See [`Arenas`] for information.
+
 mod bitmap;
 
 use core::{
@@ -189,7 +193,7 @@ impl<B: BaseAlloc> Arena<B> {
         let ptr = self.allocate_slices(count)?;
 
         let (addr, _) = ptr.to_raw_parts();
-        let commit = base.commit(NonNull::from_raw_parts(addr, mem::size_of::<Slab>()));
+        let commit = unsafe { base.commit(NonNull::from_raw_parts(addr, mem::size_of::<Slab>())) };
         // SAFETY: The fresh allocation is aligned to `SLAB_SIZE`.
         let res = commit.map(|_| unsafe {
             Slab::init(
@@ -221,6 +225,13 @@ impl<B: BaseAlloc> Arena<B> {
 }
 
 const MAX_ARENAS: usize = 112;
+/// A collection of arenas.
+///
+/// This structure manages all the memory within its lifetime. Multiple
+/// [`Context`](crate::heap::Context)s and [`Heap`](crate::heap::Heap)s can have
+/// reference to one instance of this type.
+///
+/// See [the crate-level documentation](crate) for its usage.
 pub struct Arenas<B: BaseAlloc> {
     pub(crate) base: B,
     arenas: [AtomicPtr<Arena<B>>; MAX_ARENAS],
@@ -235,6 +246,7 @@ impl<B: BaseAlloc> Arenas<B> {
     #[allow(clippy::declare_interior_mutable_const)]
     const ARENA_INIT: AtomicPtr<Arena<B>> = AtomicPtr::new(ptr::null_mut());
 
+    /// Creates a new collection of arenas.
     pub const fn new(base: B) -> Self {
         Arenas {
             base,
@@ -321,10 +333,22 @@ impl<B: BaseAlloc> Arenas<B> {
             .filter(move |(_, arena)| arena.is_exclusive == is_exclusive)
     }
 
+    /// Retrieves the base allocator of this arena collection.
     pub fn base(&self) -> &B {
         &self.base
     }
 
+    /// Manages another chunk previously allocated by an instance of its base
+    /// allocator.
+    ///
+    /// This function creates a new arena from the chunk and push it to the
+    /// collection for further allocation, extending the heap's overall
+    /// capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header allocation has failed, or the collection
+    /// is full of arenas.
     pub fn manage(&self, chunk: Chunk<B>) -> Result<(), Error<B>> {
         let arena = Arena::new_chunk(&self.base, chunk)?;
         self.push_arena(arena)?;
@@ -385,6 +409,11 @@ impl<B: BaseAlloc> Arenas<B> {
         }
     }
 
+    /// Allocates a block of memory using `layout` from this structure directly,
+    /// bypassing any instance of [`Heap`](crate::heap::Heap).
+    ///
+    /// The pointer must not be deallocated by any instance of `Heap` or other
+    /// instances of this type.
     pub fn allocate_direct(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<B>> {
         let arena = Arena::new(
             &self.base,
@@ -400,12 +429,18 @@ impl<B: BaseAlloc> Arenas<B> {
         .inspect(|&ptr| track::allocate(ptr, 0, false))
     }
 
+    /// Retrieves the layout information of an allocation.
+    ///
+    /// If `ptr` was not previously allocated directly from this structure,
+    /// `None` is returned.
     pub fn layout_of_direct(&self, ptr: NonNull<u8>) -> Option<Layout> {
         self.arenas(true)
             .find(|(_, arena)| arena.chunk.pointer().cast() == ptr)
             .map(|(_, arena)| arena.chunk.layout())
     }
 
+    /// Deallocates an allocation previously from this structure.
+    ///
     /// # Panics
     ///
     /// Panics if `ptr` is not allocated from this structure.
@@ -439,9 +474,26 @@ impl<B: BaseAlloc> Drop for Arenas<B> {
     }
 }
 
+/// The errors of all the functions of this crate.
 #[derive(Debug)]
 pub enum Error<B: BaseAlloc> {
+    /// The base error returned when an allocation failed.
     Alloc(B::Error),
+    /// The base error returned when an commission failed.
     Commit(B::Error),
+    /// The arena collection is full of arenas.
     ArenaExhausted,
+}
+
+impl<B: BaseAlloc> core::fmt::Display for Error<B>
+where
+    B::Error: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::Alloc(err) => write!(f, "base allocation failed: {err}"),
+            Error::Commit(err) => write!(f, "base commission failed: {err}"),
+            Error::ArenaExhausted => write!(f, "the arena collection is full of arenas"),
+        }
+    }
 }

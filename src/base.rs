@@ -1,3 +1,7 @@
+//! The module of base allocators.
+//!
+//! See [`BaseAlloc`] for more information.
+
 #[cfg(feature = "base-mmap")]
 mod mmap;
 #[cfg(feature = "base-static")]
@@ -10,7 +14,7 @@ use core::{
 };
 
 #[cfg(feature = "base-mmap")]
-pub use self::mmap::MmapAlloc;
+pub use self::mmap::Mmap;
 #[cfg(feature = "base-static")]
 pub use self::static_::Static;
 
@@ -18,18 +22,45 @@ pub use self::static_::Static;
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StaticHandle;
 
+/// The trait of base allocators.
+///
+/// To support `no_std` features and various application scenarios, ferroc
+/// serves itself and a middleware between the user and its base allocators.
+///
+/// Base allocators are generally allocating memory at a coarser granularity,
+/// usually page-aligned.
+///
+/// The default implementations of `BaseAlloc` in this crate are [`Mmap`] backed
+/// by [a Rust mmap interface](https://github.com/darfink/region-rs), and
+/// [`Static`] backed by manual & static memory allocations.
+///
 /// # Safety
 ///
 /// `allocate` must return a valid & free memory block containing `layout`,
 /// zeroed if `IS_ZEROED`, if possible.
 pub unsafe trait BaseAlloc: Sized {
+    /// Indicates if the base allocator are returning zeroed allocations by
+    /// default.
     const IS_ZEROED: bool;
 
+    /// The opaque handle of this allocator, usually its metadata or for RAII
+    /// purposes.
     type Handle;
+    /// The errors of the base allocator.
     type Error;
 
+    /// Allocate a memory [`Chunk`] of `layout`.
+    ///
+    /// `commit` indicates whether the chunk should be committed right after the
+    /// allocation and don't need to be [`commit`](BaseAlloc::commit)ted again.
     fn allocate(&self, layout: Layout, commit: bool) -> Result<Chunk<Self>, Self::Error>;
 
+    /// Deallocate a memory [`Chunk`].
+    ///
+    /// Note that this function doesn't contain a receiver argument, since its
+    /// additional information should be contained in the
+    /// [`handle`](Chunk::handle) of the chunk.
+    ///
     /// # Safety
     ///
     /// - `chunk` must point to a valid & owned memory block containing
@@ -37,11 +68,21 @@ pub unsafe trait BaseAlloc: Sized {
     /// - `chunk` must not be used any longer after the deallocation.
     unsafe fn deallocate(chunk: &mut Chunk<Self>);
 
-    fn commit(&self, ptr: NonNull<[u8]>) -> Result<(), Self::Error> {
+    /// Commit a block of memory in a memory chunk previously allocated by this
+    /// allocator.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a block of memory in a memory chunk previously
+    /// allocated by this allocator.
+    unsafe fn commit(&self, ptr: NonNull<[u8]>) -> Result<(), Self::Error> {
         let _ = ptr;
         Ok(())
     }
 
+    /// Decommit a block of memory in a memory chunk previously allocated by
+    /// this allocator.
+    ///
     /// # Errors
     ///
     /// This function will return an error if the decommission failed.
@@ -75,6 +116,9 @@ unsafe impl<A: Allocator + Clone> BaseAlloc for A {
     }
 }
 
+/// A zeroed base allocator wrapper of an [`Allocator`].
+///
+/// The allocated memory chunk of this structure is always zeroed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Zeroed<A: Allocator>(pub A);
 
@@ -110,6 +154,9 @@ unsafe impl<B: BaseAlloc> Send for Chunk<B> where B::Handle: Send {}
 unsafe impl<B: BaseAlloc> Sync for Chunk<B> where B::Handle: Sync {}
 
 impl<B: BaseAlloc> Chunk<B> {
+    /// Creates a memory chunk manually. This function should only be used by an
+    /// implementation of a base allocator.
+    ///
     /// # Safety
     ///
     /// `ptr` must points to a valid & owned block of memory of `layout`, and
@@ -118,6 +165,8 @@ impl<B: BaseAlloc> Chunk<B> {
         Chunk { ptr, layout, handle }
     }
 
+    /// Creates a static memory chunk.
+    ///
     /// # Safety
     ///
     /// `ptr` must points to a valid, owned & static block of memory of
@@ -129,15 +178,15 @@ impl<B: BaseAlloc> Chunk<B> {
         Self::new(ptr, layout, StaticHandle)
     }
 
+    /// Retrieves the layout information of this chunk.
     pub fn layout(&self) -> Layout {
         self.layout
     }
 
+    /// Retrieves the pointer of this chunk.
     pub fn pointer(&self) -> NonNull<[u8]> {
         NonNull::slice_from_raw_parts(self.ptr, self.layout.size())
     }
-
-    // pub fn into_static(self)
 }
 
 impl<B: BaseAlloc> Drop for Chunk<B> {

@@ -4,16 +4,18 @@ use region::{Allocation, Protection};
 
 use super::{BaseAlloc, Chunk};
 
+/// A base allocator backed by `mmap` function series.
 #[derive(Debug, Clone, Copy, Default, Hash)]
-pub struct MmapAlloc;
+pub struct Mmap;
 
-impl MmapAlloc {
+impl Mmap {
+    /// Creates a new `mmap` base allocator.
     pub const fn new() -> Self {
-        MmapAlloc
+        Mmap
     }
 }
 
-unsafe impl BaseAlloc for MmapAlloc {
+unsafe impl BaseAlloc for Mmap {
     const IS_ZEROED: bool = true;
 
     type Error = region::Error;
@@ -49,7 +51,7 @@ unsafe impl BaseAlloc for MmapAlloc {
         unsafe { ManuallyDrop::drop(&mut chunk.handle) }
     }
 
-    fn commit(&self, ptr: NonNull<[u8]>) -> Result<(), Self::Error> {
+    unsafe fn commit(&self, ptr: NonNull<[u8]>) -> Result<(), Self::Error> {
         let (ptr, len) = ptr.to_raw_parts();
         // SAFETY: The corresponding memory area is going to be used.
         unsafe { region::protect(ptr.as_ptr(), len, Protection::READ_WRITE) }
