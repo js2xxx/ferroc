@@ -74,6 +74,16 @@ fn main() {
 - `"c"`: `fe_*` C functions for C/C++ targets and a generated C/C++ header `"ferroc.h"` in the root directory, and replacement for default allocator functions such as `malloc` if `--cfg sys_alloc` is specified;
 - `"track-valgrind"`: Valgrind memory tracking support based on [`crabgrind`](https://github.com/2dav/crabgrind).
 
+## Benchmarks
+
+Using a subset of [`mimalloc-bench`](https://github.com/daanx/mimalloc-bench) for benchmarking. Running on my laptop with 16GB of RAM and an Intel i7-10750H CPU @ 2.60GHz.
+
+Time consumed:
+![Time consumed](./assets/time.png)
+
+Memory consumed:
+![Memory consumed](./assets/memory.png)
+
 ## Caveats
 
 This crate only supports the latest nightly Rust compiler currently and utilizes many unstable features. Use it with care.
