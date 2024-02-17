@@ -1,5 +1,9 @@
 # Ferroc: A Multithread Lock-free Memory Allocator
 
+[![Cargo](https://img.shields.io/crates/v/ferroc?style=for-the-badge)](https://crates.io/crates/ferroc)
+[![Documentation](https://img.shields.io/docsrs/ferroc?style=for-the-badge)](https://docs.rs/ferroc)
+[![License](https://img.shields.io/crates/l/ferroc?style=for-the-badge)](https://github.com/js2xxx/ferroc)
+
 Ferroc (combined from "ferrum" and "malloc") is a lock-free concurrent memory allocator written in Rust, primarily inspired by [`mimalloc`](https://github.com/microsoft/mimalloc).
 
 This memory allocator is designed to work as fast as other mainstream memory allocators while providing flexible configurations such as embedded/bare-metal environment integrations.
