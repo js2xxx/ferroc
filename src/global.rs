@@ -24,6 +24,7 @@ macro_rules! config_stat {
 
 #[macro_export]
 #[doc(hidden)]
+#[allow_internal_unstable(allocator_api)]
 macro_rules! config_inner {
     (@TYPES $vis:vis, $bt:ty) => {
         #[doc = concat!("The chunk type of the `", stringify!($bt), "` backend.")]
@@ -188,7 +189,6 @@ macro_rules! config_inner {
 ///   - `pthread` - use the `pthread` thread-local key destructor when a thread
 ///     exits. Requires `libc` feature.
 #[macro_export]
-#[allow_internal_unstable(allocator_api)]
 macro_rules! config {
     ($vis:vis $name:ident($bs:expr) => $bt:ty: $($options:tt)*) => {
         $crate::thread_mod!($($options)*);

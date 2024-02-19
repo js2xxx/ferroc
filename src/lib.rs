@@ -138,7 +138,8 @@ pub mod base;
 #[cfg(feature = "c")]
 mod c;
 #[cfg(feature = "global")]
-mod global;
+#[doc(hidden)]
+pub mod global;
 pub mod heap;
 mod slab;
 #[cfg(feature = "stat")]
