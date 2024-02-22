@@ -49,6 +49,17 @@ pub extern "C" fn aligned_alloc(align: usize, size: usize) -> *mut c_void {
 }
 
 #[no_mangle]
+#[cfg_attr(not(sys_alloc), export_name = "fe_memalign")]
+pub extern "C" fn memalign(align: usize, size: usize) -> *mut c_void {
+    let Ok(layout) = Layout::from_size_align(size, align) else {
+        return ptr::null_mut();
+    };
+    Ferroc
+        .allocate(layout)
+        .map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
+}
+
+#[no_mangle]
 #[cfg_attr(not(sys_alloc), export_name = "fe_malloc_usable_size")]
 pub unsafe extern "C" fn malloc_usable_size(ptr: *mut c_void) -> usize {
     match NonNull::new(ptr) {
