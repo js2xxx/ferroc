@@ -56,21 +56,25 @@ macro_rules! thread_init_pthread {
             data: *mut core::ffi::c_void,
             dtor: unsafe extern "C" fn(*mut core::ffi::c_void),
         ) {
-            use core::sync::atomic::{AtomicU32, Ordering::*};
+            use core::sync::atomic::{AtomicUsize, Ordering::*};
 
-            static KEY_INIT: AtomicU32 = AtomicU32::new(u32::MAX);
+            const VAL_INIT: usize = usize::MAX;
+            static KEY_INIT: AtomicUsize = AtomicUsize::new(VAL_INIT);
+
             let mut key = KEY_INIT.load(Relaxed);
-            if key == u32::MAX {
-                let ret = $crate::global::thread::pthread_key_create(&mut key, Some(dtor));
+            if key == VAL_INIT {
+                let mut new = 0;
+                let ret = $crate::global::thread::pthread_key_create(&mut new, Some(dtor));
                 assert_eq!(ret, 0);
+                key = new as usize;
 
-                if let Err(already_set) = KEY_INIT.compare_exchange(u32::MAX, key, AcqRel, Acquire)
+                if let Err(already_set) = KEY_INIT.compare_exchange(VAL_INIT, key, AcqRel, Acquire)
                 {
-                    let _ = $crate::global::thread::pthread_key_delete(key);
+                    let _ = $crate::global::thread::pthread_key_delete(key as _);
                     key = already_set;
                 }
             }
-            let ret = $crate::global::thread::pthread_setspecific(key, data);
+            let ret = $crate::global::thread::pthread_setspecific(key as _, data);
             assert_eq!(ret, 0);
         }
     };
