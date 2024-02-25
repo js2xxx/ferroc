@@ -27,10 +27,19 @@ pub const OBJ_SIZE_COUNT: usize = obj_size_index(ObjSizeType::LARGE_MAX) + 1;
 /// This function is the inverse function of [`obj_size`].
 pub const fn obj_size_index(size: usize) -> usize {
     match size - 1 {
+        #[cfg(feature = "finer-grained")]
         size_m1 @ 0..=63 => size_m1 >> 3,
+        #[cfg(not(feature = "finer-grained"))]
+        size_m1 @ 0..=63 => size_m1 >> 4,
         size_m1 => {
             let msb_m2 = (usize::BITS - size_m1.leading_zeros() - 3) as usize;
-            ((msb_m2 - 2) << 2) + ((size_m1 >> msb_m2) & 3)
+
+            #[cfg(feature = "finer-grained")]
+            return ((msb_m2 - 2) << 2) + ((size_m1 >> msb_m2) & 3);
+            #[cfg(not(feature = "finer-grained"))]
+            {
+                ((msb_m2 - 3) << 2) + ((size_m1 >> msb_m2) & 3)
+            }
         }
     }
 }
@@ -39,9 +48,15 @@ pub const fn obj_size_index(size: usize) -> usize {
 ///
 /// This function is the inverse function of [`obj_size_index`].
 pub const fn obj_size(index: usize) -> usize {
-    match index {
+    #[cfg(feature = "finer-grained")]
+    return match index {
         0..=6 => (index + 1) << 3,
         i => (64 + (((i - 7) & 3) << 4)) << ((i - 7) >> 2),
+    };
+    #[cfg(not(feature = "finer-grained"))]
+    match index {
+        0..=2 => (index + 1) << 4,
+        i => (64 + (((i - 3) & 3) << 4)) << ((i - 3) >> 2),
     }
 }
 
@@ -420,9 +435,11 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         #[cfg(not(feature = "stat"))]
         let mut stat = ();
         if layout.size() & (layout.align() - 1) == 0 {
-            return self.pop(layout.size(), &mut stat);
+            return (self.pop(layout.size(), &mut stat))
+                .inspect(|p| debug_assert!(p.is_aligned_to(layout.align())));
         }
         self.pop_aligned(layout, &mut stat)
+            .inspect(|p| debug_assert!(p.is_aligned_to(layout.align())))
     }
 
     /// Retrives the statstics of this heap.
@@ -614,5 +631,28 @@ unsafe impl<'arena: 'cx, 'cx, B: BaseAlloc> Allocator for Heap<'arena, 'cx, B> {
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         self.deallocate(ptr, layout)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::heap::{obj_size, obj_size_index};
+
+    #[test]
+    fn test_obj_size() {
+        assert_eq!(obj_size_index(16), 0);
+        assert_eq!(obj_size_index(32), 1);
+        assert_eq!(obj_size_index(48), 2);
+        assert_eq!(obj_size_index(64), 3);
+        assert_eq!(obj_size_index(80), 4);
+        assert_eq!(obj_size_index(96), 5);
+        assert_eq!(obj_size_index(112), 6);
+        assert_eq!(16, obj_size(0));
+        assert_eq!(32, obj_size(1));
+        assert_eq!(48, obj_size(2));
+        assert_eq!(64, obj_size(3));
+        assert_eq!(80, obj_size(4));
+        assert_eq!(96, obj_size(5));
+        assert_eq!(112, obj_size(6));
     }
 }
