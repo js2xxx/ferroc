@@ -35,7 +35,7 @@ memmap2 = {version = "0.9", optional = true}
 fastrand = "2.0"
 
 [build-dependencies]
-cbindgen = {version = "0.24", optional = true}
+cbindgen = {version = "0.26", optional = true}
 
 [profile.release]
 codegen-units = 1
