@@ -130,7 +130,7 @@
 #![cfg_attr(feature = "global", feature(allow_internal_unsafe))]
 #![cfg_attr(feature = "global", feature(allow_internal_unstable))]
 
-#[cfg(test)]
+#[cfg(any(test, feature = "base-mmap"))]
 extern crate std;
 
 pub mod arena;
