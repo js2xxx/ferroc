@@ -1,0 +1,49 @@
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    name: Build
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy on default
+        run: cargo clippy -- -D warnings
+      
+      - name: Build default
+        run: cargo build --release --verbose
+
+      - name: Run default examples
+        run: |
+          cargo run --release --example random
+          cargo run --release --example stress
+          cargo run --release --example random2
+
+      - name: Clippy on C dynamic library
+        run: cargo clippy --features c -- -D warnings
+        env:
+          RUSTFLAGS: --cfg sys_alloc
+
+      - name: Build C dynamic library
+        run: cargo build --release --features c
+        env:
+          RUSTFLAGS: --cfg sys_alloc
