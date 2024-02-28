@@ -578,6 +578,8 @@ pub enum Error<B: BaseAlloc> {
     Commit(B::Error),
     /// The arena collection is full of arenas.
     ArenaExhausted,
+    /// The heap is not yet initialized.
+    Uninit,
 }
 
 impl<B: BaseAlloc> core::fmt::Display for Error<B>
@@ -589,6 +591,7 @@ where
             Error::Alloc(err) => write!(f, "base allocation failed: {err}"),
             Error::Commit(err) => write!(f, "base commission failed: {err}"),
             Error::ArenaExhausted => write!(f, "the arena collection is full of arenas"),
+            Error::Uninit => write!(f, "uninitialized heap"),
         }
     }
 }

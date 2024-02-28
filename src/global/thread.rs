@@ -8,30 +8,30 @@ pub use libc::{pthread_key_create, pthread_key_delete, pthread_setspecific};
 #[allow_internal_unstable(thread_local)]
 macro_rules! thread_statics {
     () => {
-        use core::{cell::Cell, mem::MaybeUninit};
+        use core::mem::{ManuallyDrop, MaybeUninit};
 
         use super::{Context, Heap, ARENAS};
-
-        #[thread_local]
-        static INIT: Cell<bool> = Cell::new(false);
 
         #[thread_local]
         static mut CX: MaybeUninit<Context> = MaybeUninit::uninit();
 
         #[thread_local]
-        static mut HEAP: MaybeUninit<Heap> = MaybeUninit::uninit();
+        static mut HEAP: ManuallyDrop<Heap> = ManuallyDrop::new(Heap::new_uninit());
 
         #[inline]
         pub fn with<T>(f: impl FnOnce(&Heap) -> T) -> T {
-            if !INIT.get() {
+            if !unsafe { HEAP.is_init() } {
                 unsafe {
                     init();
                     let cx = CX.write(Context::new(&ARENAS));
-                    HEAP.write(Heap::new(cx));
+                    HEAP.init(cx);
                 }
-                INIT.set(true);
             }
-            f(unsafe { HEAP.assume_init_ref() })
+            f(unsafe { &*core::ptr::addr_of!(HEAP) })
+        }
+
+        pub fn with_uninit<T>(f: impl FnOnce(&Heap) -> T) -> T {
+            f(unsafe { &*core::ptr::addr_of!(HEAP) })
         }
     };
 }
@@ -43,8 +43,8 @@ macro_rules! thread_init_pthread {
     () => {
         unsafe fn init() {
             unsafe extern "C" fn fini(_: *mut core::ffi::c_void) {
-                if INIT.get() {
-                    HEAP.assume_init_drop();
+                if HEAP.is_init() {
+                    ManuallyDrop::drop(&mut *core::ptr::addr_of_mut!(HEAP));
                     CX.assume_init_drop();
                 }
             }

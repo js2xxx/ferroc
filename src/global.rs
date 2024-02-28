@@ -33,7 +33,11 @@ macro_rules! config_c {
             size: core::num::NonZeroUsize,
             zero: bool,
         ) -> Result<core::ptr::NonNull<[u8]>, Error> {
-            thread::with(|heap| heap.malloc(size, zero))
+            match thread::with_uninit(|heap| heap.malloc(size, zero)) {
+                Ok(ptr) => Ok(ptr),
+                Err(Error::Uninit) => thread::with(|heap| heap.malloc(size, zero)),
+                Err(e) => Err(e),
+            }
         }
 
         #[inline]
@@ -137,7 +141,11 @@ macro_rules! config_inner {
             $vis fn allocate(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, Error>
             {
-                thread::with(|heap| heap.allocate(layout))
+                match thread::with_uninit(|heap| heap.allocate(layout)) {
+                    Ok(ptr) => Ok(ptr),
+                    Err(Error::Uninit) => thread::with(|heap| heap.allocate(layout)),
+                    Err(e) => Err(e),
+                }
             }
 
             /// Allocate a zeroed memory block of `layout` from the current heap.
@@ -155,7 +163,11 @@ macro_rules! config_inner {
             $vis fn allocate_zeroed(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, Error>
             {
-                thread::with(|heap| heap.allocate_zeroed(layout))
+                match thread::with_uninit(|heap| heap.allocate_zeroed(layout)) {
+                    Ok(ptr) => Ok(ptr),
+                    Err(Error::Uninit) => thread::with(|heap| heap.allocate_zeroed(layout)),
+                    Err(e) => Err(e),
+                }
             }
 
             /// Retrieves the layout information of a specific allocation.
