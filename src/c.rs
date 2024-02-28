@@ -3,6 +3,7 @@ use core::ffi::c_char;
 use core::{
     alloc::Layout,
     ffi::{c_int, c_void},
+    num::NonZeroUsize,
     ptr::{self, NonNull},
 };
 
@@ -11,11 +12,11 @@ use crate::{base::Mmap, Ferroc};
 #[no_mangle]
 #[cfg_attr(not(sys_alloc), export_name = "fe_malloc")]
 pub extern "C" fn malloc(size: usize) -> *mut c_void {
-    let Ok(layout) = Layout::array::<u8>(size) else {
+    let Some(size) = NonZeroUsize::new(size) else {
         return ptr::null_mut();
     };
     Ferroc
-        .allocate(layout)
+        .malloc(size, false)
         .map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
 }
 
@@ -98,11 +99,11 @@ pub extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
     let Some(size) = nmemb.checked_mul(size) else {
         return ptr::null_mut();
     };
-    let Ok(layout) = Layout::array::<u8>(size) else {
+    let Some(size) = NonZeroUsize::new(size) else {
         return ptr::null_mut();
     };
     Ferroc
-        .allocate_zeroed(layout)
+        .malloc(size, true)
         .map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
 }
 

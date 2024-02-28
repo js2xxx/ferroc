@@ -22,6 +22,34 @@ macro_rules! config_stat {
     ($vis:vis) => {};
 }
 
+#[cfg(feature = "c")]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! config_c {
+    ($vis:vis) => {
+        #[inline]
+        pub(crate) fn malloc(
+            &self,
+            size: core::num::NonZeroUsize,
+            zero: bool,
+        ) -> Result<core::ptr::NonNull<[u8]>, Error> {
+            thread::with(|heap| heap.malloc(size, zero))
+        }
+
+        #[inline]
+        pub(crate) unsafe fn free(&self, ptr: core::ptr::NonNull<u8>) {
+            thread::with(|heap| heap.free(ptr))
+        }
+    };
+}
+
+#[cfg(not(feature = "c"))]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! config_c {
+    ($vis:vis) => {};
+}
+
 #[macro_export]
 #[doc(hidden)]
 #[allow_internal_unstable(allocator_api)]
@@ -161,17 +189,7 @@ macro_rules! config_inner {
                 thread::with(|heap| heap.deallocate(ptr, layout))
             }
 
-            /// Like `deallocate`, but without specifying its layout information.
-            ///
-            /// # Safety
-            ///
-            /// `ptr` must point to an owned, valid memory block, previously allocated
-            /// by a certain instance of `Heap` alive in the scope.
-            #[cfg(feature = "c")]
-            #[inline]
-            $vis unsafe fn free(&self, ptr: core::ptr::NonNull<u8>) {
-                thread::with(|heap| heap.free(ptr))
-            }
+            $crate::config_c!($vis);
         }
 
         unsafe impl core::alloc::Allocator for $name {

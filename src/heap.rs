@@ -404,7 +404,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         zero: bool,
         stat: &mut Stat,
     ) -> Result<NonNull<[u8]>, Error<B>> {
-        Ok(match obj_size_type(layout.size()) {
+        match obj_size_type(layout.size()) {
             Small | Medium | Large
                 if let index = obj_size_index(layout.size())
                     && let Some(shard) = self.shards[index].current()
@@ -417,23 +417,32 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 }
                 let ptr = NonNull::from_raw_parts(block.into_raw(), layout.size());
                 post_alloc(ptr, is_zeroed, zero);
-                ptr
+                Ok(ptr)
             }
-            Huge if layout.align() <= SHARD_SIZE => {
-                return self.pop_huge(layout.size(), zero, stat)
-            }
-            _ if layout.align() < SLAB_SIZE => {
-                let (ptr, is_zeroed) =
-                    self.pop_untracked(layout.size() + layout.align() - 1, stat, true)?;
-                let addr = (ptr.addr().get() + layout.align() - 1) & !(layout.align() - 1);
-                let ptr = ptr.cast().with_addr(NonZeroUsize::new(addr).unwrap());
+            Huge if layout.align() <= SHARD_SIZE => self.pop_huge(layout.size(), zero, stat),
+            _ => self.pop_aligned_contended(layout, zero, stat),
+        }
+    }
 
-                let ptr = NonNull::from_raw_parts(ptr, layout.size());
-                post_alloc(ptr, is_zeroed, zero);
-                ptr
-            }
-            _ => return self.cx.arena.allocate_direct(layout, zero),
-        })
+    #[cold]
+    fn pop_aligned_contended(
+        &self,
+        layout: Layout,
+        zero: bool,
+        stat: &mut Stat,
+    ) -> Result<NonNull<[u8]>, Error<B>> {
+        if layout.align() <= SHARD_SIZE {
+            let (ptr, is_zeroed) =
+                self.pop_untracked(layout.size() + layout.align() - 1, stat, true)?;
+            let addr = (ptr.addr().get() + layout.align() - 1) & !(layout.align() - 1);
+            let ptr = ptr.cast().with_addr(NonZeroUsize::new(addr).unwrap());
+
+            let ptr = NonNull::from_raw_parts(ptr, layout.size());
+            post_alloc(ptr, is_zeroed, zero);
+            Ok(ptr)
+        } else {
+            self.cx.arena.allocate_direct(layout, zero)
+        }
     }
 
     #[doc(hidden)]
@@ -459,6 +468,15 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
         self.pop_aligned(layout, zero, &mut stat)
             .inspect(|p| debug_assert!(p.is_aligned_to(layout.align())))
+    }
+
+    #[cfg(feature = "c")]
+    pub(crate) fn malloc(&self, size: NonZeroUsize, zero: bool) -> Result<NonNull<[u8]>, Error<B>> {
+        #[cfg(feature = "stat")]
+        let mut stat = self.cx.stat.borrow_mut();
+        #[cfg(not(feature = "stat"))]
+        let mut stat = ();
+        self.pop(size.get(), zero, &mut stat)
     }
 
     /// Allocate a memory block of `layout`.
