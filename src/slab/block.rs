@@ -65,12 +65,10 @@ impl<'a> BlockRef<'a> {
             track::defined(ptr.cast(), Self::SLOT_SIZE);
             // SAFETY: this structure contains a valid `next` pointer.
             let next: Option<NonNull<()>> = unsafe { ptr.read() };
-            track::no_access(ptr.cast(), Self::SLOT_SIZE);
 
             match next {
                 Some(next) => ptr = next.cast(),
-                _ => {
-                    track::undefined(ptr.cast(), Self::SLOT_SIZE);
+                None => {
                     // SAFETY: this structure contains a valid `next` pointer.
                     unsafe { ptr.write(data.map(Self::into_raw)) };
                     track::no_access(ptr.cast(), Self::SLOT_SIZE);
@@ -78,6 +76,7 @@ impl<'a> BlockRef<'a> {
                 }
             }
             count += 1;
+            track::no_access(ptr.cast(), Self::SLOT_SIZE);
         }
         count
     }

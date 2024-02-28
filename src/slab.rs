@@ -76,7 +76,7 @@ pub(crate) struct Slab<'a> {
     pub(super) thread_id: u64,
     pub(super) arena_id: usize,
     pub(super) is_large_or_huge: bool,
-    size: usize,
+    pub(super) size: usize,
     used: Cell<usize>,
     abandoned: Cell<usize>,
     pub(super) abandoned_next: AtomicPtr<()>,
@@ -341,7 +341,7 @@ impl<'a> Shard<'a> {
             block.set_next(NonNull::new(cur).map(|p| unsafe { BlockRef::from_raw(p) }));
 
             let new = block.as_ptr();
-            match thread_free.compare_exchange(cur, new, AcqRel, Acquire) {
+            match thread_free.compare_exchange_weak(cur, new, AcqRel, Acquire) {
                 Ok(_) => break,
                 Err(e) => cur = e,
             }
@@ -353,18 +353,15 @@ impl<'a> Shard<'a> {
         let mut thread_free = loop {
             match NonNull::new(ptr) {
                 None => return,
-                Some(nn) => {
-                    match self.thread_free.get().compare_exchange(
-                        ptr,
-                        ptr::null_mut(),
-                        AcqRel,
-                        Acquire,
-                    ) {
-                        // SAFETY: `thread_free` owns a list of blocks.
-                        Ok(_) => break unsafe { BlockRef::from_raw(nn) },
-                        Err(e) => ptr = e,
-                    }
-                }
+                Some(nn) => match self.thread_free.get().compare_exchange_weak(
+                    ptr,
+                    ptr::null_mut(),
+                    AcqRel,
+                    Acquire,
+                ) {
+                    Ok(_) => break unsafe { BlockRef::from_raw(nn) },
+                    Err(e) => ptr = e,
+                },
             }
         };
 
