@@ -23,7 +23,7 @@ impl<'a> BlockRef<'a> {
         self.0
     }
 
-    pub(super) fn as_ptr(&self) -> *mut () {
+    pub(crate) fn as_ptr(&self) -> *mut () {
         self.0.as_ptr()
     }
 
@@ -37,10 +37,7 @@ impl<'a> BlockRef<'a> {
     /// # Safety
     ///
     /// The pointer must not be owned by other blocks.
-    pub(super) unsafe fn new(ptr: NonNull<()>, zero: bool) -> Self {
-        if zero {
-            unsafe { ptr.write_bytes(0, Self::SLOT_SIZE) };
-        }
+    pub(super) unsafe fn new(ptr: NonNull<()>) -> Self {
         unsafe { Self::from_raw(ptr) }
     }
 

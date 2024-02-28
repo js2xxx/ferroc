@@ -162,18 +162,18 @@ impl<'a> Slab<'a> {
     pub(crate) unsafe fn shard_infos(
         this: NonNull<Self>,
         ptr: NonNull<()>,
-    ) -> (NonNull<Shard<'a>>, BlockRef<'a>, usize) {
+    ) -> (NonNull<Shard<'a>>, BlockRef<'a>) {
         // SAFETY: The same as `shard_meta`.
         let (shard, index) = unsafe { Self::shard_meta(this, ptr) };
         debug_assert!(index >= Self::HEADER_COUNT);
 
         // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
         // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
-        let obj_size = unsafe { (*ptr::addr_of!((*shard.as_ptr()).obj_size)).load(Relaxed) };
-
         let ptr = if !unsafe { (*ptr::addr_of!((*shard.as_ptr()).has_aligned)).load(Relaxed) } {
             ptr
         } else {
+            let obj_size = unsafe { Shard::obj_size_raw(shard) };
+
             // SAFETY: `this` is valid.
             let area = unsafe { Self::shard_area(this, index) };
 
@@ -185,7 +185,7 @@ impl<'a> Slab<'a> {
             })
         };
 
-        (shard, unsafe { BlockRef::from_raw(ptr) }, obj_size)
+        (shard, unsafe { BlockRef::from_raw(ptr) })
     }
 
     /// # Safety
@@ -212,10 +212,15 @@ impl<'a> Slab<'a> {
         addr_of_mut!((*slab).abandoned).write(Cell::new(0));
         addr_of_mut!((*slab).abandoned_next).write(ptr::null_mut::<()>().into());
 
-        let shards: &mut [MaybeUninit<Shard<'a>>; SHARD_COUNT] =
-            mem::transmute(addr_of_mut!((*slab).shards).as_uninit_mut().unwrap());
+        let shards: &mut [MaybeUninit<Shard<'a>>; SHARD_COUNT] = mem::transmute(
+            addr_of_mut!((*slab).shards)
+                .as_uninit_mut()
+                .unwrap_unchecked(),
+        );
 
-        let (first, rest) = shards[Self::HEADER_COUNT..].split_first_mut().unwrap();
+        let (first, rest) = shards[Self::HEADER_COUNT..]
+            .split_first_mut()
+            .unwrap_unchecked();
         first.write(Shard::new(SHARD_COUNT - Self::HEADER_COUNT, free_is_zero));
         for s in rest {
             s.write(Shard::new(0, free_is_zero));
@@ -284,20 +289,24 @@ impl<'a> Shard<'a> {
         self.used.get() == self.capacity.get()
     }
 
-    pub(crate) fn pop_block(&self) -> Option<BlockRef<'a>> {
+    pub(crate) unsafe fn obj_size_raw(this: NonNull<Self>) -> usize {
+        unsafe { (*ptr::addr_of!((*this.as_ptr()).obj_size)).load(Relaxed) }
+    }
+
+    pub(crate) fn pop_block(&self) -> Option<(BlockRef<'a>, bool)> {
         self.free.take().map(|mut block| {
             self.used.set(self.used.get() + 1);
             self.free.set(block.take_next());
-            block
+            (block, self.free_is_zero.get())
         })
     }
 
-    pub(crate) fn pop_block_aligned(&self, align: usize) -> Option<BlockRef<'a>> {
+    pub(crate) fn pop_block_aligned(&self, align: usize) -> Option<(BlockRef<'a>, bool)> {
         self.free.take().and_then(|mut block| {
             if block.as_ptr().is_aligned_to(align) {
                 self.used.set(self.used.get() + 1);
                 self.free.set(block.take_next());
-                Some(block)
+                Some((block, self.free_is_zero.get()))
             } else {
                 self.free.set(Some(block));
                 None
@@ -340,11 +349,23 @@ impl<'a> Shard<'a> {
     }
 
     fn collect_thread_free(&self) {
-        let ptr = self.thread_free.get().swap(ptr::null_mut(), AcqRel);
-        let mut thread_free = match NonNull::new(ptr) {
-            // SAFETY: `thread_free` owns a list of blocks.
-            Some(ptr) => unsafe { BlockRef::from_raw(ptr) },
-            _ => return,
+        let mut ptr = self.thread_free.get().load(Relaxed);
+        let mut thread_free = loop {
+            match NonNull::new(ptr) {
+                None => return,
+                Some(nn) => {
+                    match self.thread_free.get().compare_exchange(
+                        ptr,
+                        ptr::null_mut(),
+                        AcqRel,
+                        Acquire,
+                    ) {
+                        // SAFETY: `thread_free` owns a list of blocks.
+                        Ok(_) => break unsafe { BlockRef::from_raw(nn) },
+                        Err(e) => ptr = e,
+                    }
+                }
+            }
         };
 
         let count = thread_free.set_tail(self.local_free.take());
@@ -377,25 +398,32 @@ impl<'a> Shard<'a> {
 impl<'a> Shard<'a> {
     pub(crate) fn slab(&self) -> (&'a Slab<'a>, usize) {
         // SAFETY: A shard cannot be manually used on the stack.
-        let slab = unsafe { Slab::from_ptr(self.into()) }.unwrap();
+        let slab = unsafe { Slab::from_ptr(self.into()).unwrap_unchecked() };
         let slab = unsafe { slab.as_ref() };
         // SAFETY: `self` must reside in the `shards` array in its `Slab`.
         let index = unsafe { (self as *const Self).sub_ptr(slab.shards.as_ptr()) };
         (slab, index)
     }
 
-    pub(crate) fn extend_count(&self, count: usize) {
+    fn extend_inner(&self, obj_size: usize, capacity: usize, cap_limit: usize) {
+        if cap_limit == capacity {
+            return;
+        }
+        const MIN_EXTEND: usize = 4;
+        const MAX_EXTEND_SIZE: usize = 4096;
+
+        let limit = (MAX_EXTEND_SIZE / obj_size).max(MIN_EXTEND);
+
+        let count = limit.min(cap_limit - capacity);
+
         let (slab, index) = self.slab();
         // SAFETY: `slab` is valid.
         let area = unsafe { Slab::shard_area(slab.into(), index) };
-        let obj_size = self.obj_size.load(Relaxed);
-        let capacity = self.capacity.get();
-        debug_assert!(capacity + count <= self.cap_limit.get());
+        debug_assert!(capacity + count <= cap_limit);
 
         // SAFETY: the `area` is owned by this shard in a similar way to `Cell<[u8]>`.
-        let iter = (capacity..capacity + count).map(|index| unsafe {
-            BlockRef::new(area.add(index * obj_size).cast(), !self.free_is_zero.get())
-        });
+        let iter = (capacity..capacity + count)
+            .map(|index| unsafe { BlockRef::new(area.add(index * obj_size).cast()) });
 
         let mut last = self.free.take();
         iter.rev().for_each(|mut block| {
@@ -407,13 +435,13 @@ impl<'a> Shard<'a> {
         self.capacity.set(capacity + count);
     }
 
+    #[inline]
     pub(crate) fn extend(&self) {
-        const MIN_EXTEND: usize = 4;
-        const MAX_EXTEND_SIZE: usize = 4096;
-
-        let delta = self.cap_limit.get() - self.capacity.get();
-        let limit = (MAX_EXTEND_SIZE / self.obj_size.load(Relaxed)).max(MIN_EXTEND);
-        self.extend_count(limit.min(delta))
+        self.extend_inner(
+            self.obj_size.load(Relaxed),
+            self.capacity.get(),
+            self.cap_limit.get(),
+        )
     }
 
     pub(crate) fn init_large_or_huge<B: BaseAlloc>(
@@ -432,7 +460,8 @@ impl<'a> Shard<'a> {
 
         self.obj_size.store(obj_size, Relaxed);
         let usable_size = SLAB_SIZE * slab_count.get() - SHARD_SIZE * Slab::HEADER_COUNT;
-        self.cap_limit.set(usable_size / obj_size);
+        let cap_limit = usable_size / obj_size;
+        self.cap_limit.set(cap_limit);
         self.has_aligned.store(false, Relaxed);
 
         self.capacity.set(0);
@@ -448,7 +477,7 @@ impl<'a> Shard<'a> {
                 .map_err(Error::Commit)?;
         }
 
-        self.extend();
+        self.extend_inner(obj_size, 0, cap_limit);
 
         Ok(())
     }
@@ -480,7 +509,8 @@ impl<'a> Shard<'a> {
         }
 
         let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
-        self.cap_limit.set(SHARD_SIZE / obj_size);
+        let cap_limit = SHARD_SIZE / obj_size;
+        self.cap_limit.set(cap_limit);
         self.has_aligned.store(false, Relaxed);
 
         let shard_count = self.shard_count.replace(1) - 1;
@@ -497,7 +527,7 @@ impl<'a> Shard<'a> {
             if old_obj_size != 0 {
                 self.free_is_zero.set(false);
             }
-            self.extend();
+            self.extend_inner(obj_size, 0, cap_limit);
         }
 
         Ok(next_shard)

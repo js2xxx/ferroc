@@ -25,6 +25,7 @@ macro_rules! config_stat {
 #[macro_export]
 #[doc(hidden)]
 #[allow_internal_unstable(allocator_api)]
+#[allow_internal_unsafe]
 macro_rules! config_inner {
     (@TYPES $vis:vis, $bt:ty) => {
         #[doc = concat!("The chunk type of the `", stringify!($bt), "` backend.")]
@@ -58,6 +59,7 @@ macro_rules! config_inner {
             /// Retrieves the base allocator of this configured memory allocator.
             ///
             /// This function forwards the call to [`Arenas::base`].
+            #[inline]
             $vis fn base(&self) -> &$bt {
                 ARENAS.base()
             }
@@ -70,6 +72,7 @@ macro_rules! config_inner {
             /// capacity.
             ///
             /// This function forwards the call to [`Arenas::manage`].
+            #[inline]
             $vis fn manage(&self, chunk: Chunk) -> Result<(), Error> {
                 ARENAS.manage(chunk)
             }
@@ -84,6 +87,7 @@ macro_rules! config_inner {
             /// allocation process, which is precisely what this function does.
             ///
             /// This function forwards the call to [`Heap::collect`].
+            #[inline]
             $vis fn collect(&self, force: bool) {
                 thread::with(|heap| heap.collect(force))
             }
@@ -101,10 +105,29 @@ macro_rules! config_inner {
             ///
             /// Errors are returned when allocation fails, see [`Error`] for more
             /// information.
+            #[inline]
             $vis fn allocate(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, Error>
             {
                 thread::with(|heap| heap.allocate(layout))
+            }
+
+            /// Allocate a zeroed memory block of `layout` from the current heap.
+            ///
+            /// The allocation can be deallocated by any instance of this configured
+            /// allocator.
+            ///
+            /// This function forwards the call to [`Heap::allocate_zeroed`].
+            ///
+            /// # Errors
+            ///
+            /// Errors are returned when allocation fails, see [`Error`] for more
+            /// information.
+            #[inline]
+            $vis fn allocate_zeroed(&self, layout: core::alloc::Layout)
+                -> Result<core::ptr::NonNull<[u8]>, Error>
+            {
+                thread::with(|heap| heap.allocate_zeroed(layout))
             }
 
             /// Retrieves the layout information of a specific allocation.
@@ -120,6 +143,7 @@ macro_rules! config_inner {
             /// `ptr` must point to an owned, valid memory block of `layout`, previously
             /// allocated by a certain instance of `Heap` alive in the scope, created
             /// from the same arena.
+            #[inline]
             $vis unsafe fn layout_of(&self, ptr: core::ptr::NonNull<u8>) -> Option<core::alloc::Layout> {
                 thread::with(|heap| heap.layout_of(ptr))
             }
@@ -132,6 +156,7 @@ macro_rules! config_inner {
             /// # Safety
             ///
             /// See [`core::alloc::Allocator::deallocate`] for more information.
+            #[inline]
             $vis unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
                 thread::with(|heap| heap.deallocate(ptr, layout))
             }
@@ -150,21 +175,44 @@ macro_rules! config_inner {
         }
 
         unsafe impl core::alloc::Allocator for $name {
-            fn allocate(&self, layout: core::alloc::Layout) -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError> {
+            #[inline]
+            fn allocate(&self, layout: core::alloc::Layout)
+                -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
+            {
                 thread::with(|heap| core::alloc::Allocator::allocate(&heap, layout))
             }
 
-            unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+            #[inline]
+            fn allocate_zeroed(&self, layout: core::alloc::Layout)
+                -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
+            {
+                thread::with(|heap| core::alloc::Allocator::allocate_zeroed(&heap, layout))
+            }
+
+            #[inline]
+            unsafe fn deallocate(
+                &self,
+                ptr: core::ptr::NonNull<u8>,
+                layout: core::alloc::Layout)
+            {
                 thread::with(|heap| core::alloc::Allocator::deallocate(&heap, ptr, layout))
             }
         }
 
         unsafe impl core::alloc::GlobalAlloc for $name {
+            #[inline]
             unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
                 self.allocate(layout)
                     .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
             }
 
+            #[inline]
+            unsafe fn alloc_zeroed(&self, layout: core::alloc::Layout) -> *mut u8 {
+                self.allocate_zeroed(layout)
+                    .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
+            }
+
+            #[inline]
             unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
                 if let Some(ptr) = core::ptr::NonNull::new(ptr) {
                     self.deallocate(ptr, layout)

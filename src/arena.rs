@@ -412,7 +412,7 @@ impl<B: BaseAlloc> Arenas<B> {
     ///
     /// The pointer must not be deallocated by any instance of `Heap` or other
     /// instances of this type.
-    pub fn allocate_direct(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<B>> {
+    pub fn allocate_direct(&self, layout: Layout, zero: bool) -> Result<NonNull<[u8]>, Error<B>> {
         let arena = Arena::new(
             &self.base,
             layout.size().div_ceil(SLAB_SIZE),
@@ -424,7 +424,7 @@ impl<B: BaseAlloc> Arenas<B> {
             arena.chunk.pointer().cast(),
             layout.size(),
         ))
-        .inspect(|&ptr| track::allocate(ptr, 0, false))
+        .inspect(|&ptr| crate::heap::post_alloc(ptr, B::IS_ZEROED, zero))
     }
 
     /// Retrieves the layout information of an allocation.

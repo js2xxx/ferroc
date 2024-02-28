@@ -1,7 +1,7 @@
 #[cfg(not(sys_alloc))]
 use core::ffi::c_char;
 use core::{
-    alloc::{Allocator, Layout},
+    alloc::Layout,
     ffi::{c_int, c_void},
     ptr::{self, NonNull},
 };
