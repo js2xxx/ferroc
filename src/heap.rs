@@ -502,7 +502,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let mut stat = self.cx()?.stat.borrow_mut();
         #[cfg(not(feature = "stat"))]
         let mut stat = ();
-        if layout.size() & (layout.align() - 1) == 0 {
+        if layout.size() <= ObjSizeType::MEDIUM_MAX && layout.size() & (layout.align() - 1) == 0 {
             return (self.pop(layout.size(), zero, &mut stat))
                 .inspect(|p| debug_assert!(p.is_aligned_to(layout.align())));
         }
