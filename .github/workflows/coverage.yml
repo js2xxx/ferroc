@@ -1,0 +1,54 @@
+on:
+  schedule:
+    - cron: 0 0 * * *
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools
+
+      - name: Install fuzzing utilities
+        run: |
+          cargo install cargo-fuzz
+          cargo install cargo-cov
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: |
+            "./fuzz/artifacts"
+            "./fuzz/corpus"
+            "./fuzz/coverage"
+
+      - name: Set up configuation
+        run: |
+          cp Cargo.toml Cargo.toml.bak
+          cat Cargo.toml.bak | grep -v "lto" > Cargo.toml
+
+      - name: Fuzz target
+        run: |
+          cargo fuzz run stress --release &
+          PID=$!
+          sleep 600
+          kill -TERM $PID
+          cargo fuzz coverage stress --release
+          cargo cov -- export ./fuzz/coverage/stress/coverage.profdata \
+            -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/stress \
+            -sources ./src | rustfilt > target/coverage.json
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./target/coverage.json
+          fail_ci_if_error: true
