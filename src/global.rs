@@ -209,14 +209,14 @@ macro_rules! config_inner {
             fn allocate(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
-                thread::with(|heap| core::alloc::Allocator::allocate(&heap, layout))
+                self.allocate(layout).map_err(|_| core::alloc::AllocError)
             }
 
             #[inline]
             fn allocate_zeroed(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
-                thread::with(|heap| core::alloc::Allocator::allocate_zeroed(&heap, layout))
+                self.allocate_zeroed(layout).map_err(|_| core::alloc::AllocError)
             }
 
             #[inline]
