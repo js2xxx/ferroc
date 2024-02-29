@@ -41,7 +41,7 @@ jobs:
           cargo fuzz run stress --release &
           PID=$!
           sleep 60
-          kill -TERM $PID
+          k(){ if c=$(pgrep -P $1);then for p in $c;do k $p;done;fi;kill $1; }; k $PID
           cargo fuzz coverage stress --release
           cargo cov -- export ./fuzz/coverage/stress/coverage.profdata \
             -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/stress \
