@@ -52,3 +52,5 @@ jobs:
         with:
           file: ./target/coverage.json
           fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: js2xxx/ferroc
