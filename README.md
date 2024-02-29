@@ -2,6 +2,7 @@
 
 [![Build Status](https://img.shields.io/github/actions/workflow/status/js2xxx/ferroc/basic.yml?style=for-the-badge)](https://github.com/js2xxx/ferroc/actions)
 [![Cargo](https://img.shields.io/crates/v/ferroc?style=for-the-badge)](https://crates.io/crates/ferroc)
+[![Coverage](https://img.shields.io/codecov/c/github/js2xxx/ferroc?style=for-the-badge)](https://codecov.io/gh/js2xxx/ferroc)
 [![Documentation](https://img.shields.io/docsrs/ferroc?style=for-the-badge)](https://docs.rs/ferroc)
 [![License](https://img.shields.io/crates/l/ferroc?style=for-the-badge)](https://github.com/js2xxx/ferroc)
 
