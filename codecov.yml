@@ -1,0 +1,9 @@
+comment:
+  layout: "header, diff, flags, components"
+
+component_management:
+  individual_components:
+    - component_id: main
+      component_name: main
+      paths:
+        - ./src

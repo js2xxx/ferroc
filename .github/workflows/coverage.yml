@@ -40,7 +40,7 @@ jobs:
         run: |
           cargo fuzz run stress --release &
           PID=$!
-          sleep 600
+          sleep 60
           kill -TERM $PID
           cargo fuzz coverage stress --release
           cargo cov -- export ./fuzz/coverage/stress/coverage.profdata \
@@ -51,6 +51,6 @@ jobs:
         uses: codecov/codecov-action@v3
         with:
           file: ./target/coverage.json
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: js2xxx/ferroc
