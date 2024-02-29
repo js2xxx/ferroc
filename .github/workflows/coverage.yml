@@ -44,14 +44,15 @@ jobs:
           sleep 60
           k(){ if c=$(pgrep -P $1);then for p in $c;do k $p;done;fi;kill $1; }; k $PID
           cargo fuzz coverage stress --release
-          cargo cov -- export -instr-profile=./fuzz/coverage/stress/coverage.profdata \
+          cargo cov -- export -format=lcov \
+            -instr-profile=./fuzz/coverage/stress/coverage.profdata \
             -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/stress \
-            -sources ./src | rustfilt > target/coverage.json
+            -sources ./src | rustfilt > target/lcov.txt
 
       - name: Upload coverage report
         uses: codecov/codecov-action@v3
         with:
-          file: ./target/coverage.json
+          file: ./target/lcov.txt
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: js2xxx/ferroc
