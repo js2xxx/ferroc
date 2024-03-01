@@ -35,14 +35,18 @@ macro_rules! config_c {
         ) -> Result<core::ptr::NonNull<[u8]>, Error> {
             match thread::with_uninit(|heap| heap.malloc(size, zero)) {
                 Ok(ptr) => Ok(ptr),
-                Err(Error::Uninit) => thread::with(|heap| heap.malloc(size, zero)),
+                Err(Error::Uninit) => thread::with_init(|heap| heap.malloc(size, zero)),
                 Err(e) => Err(e),
             }
         }
 
         #[inline]
         pub(crate) unsafe fn free(&self, ptr: core::ptr::NonNull<u8>) {
-            thread::with(|heap| heap.free(ptr))
+            let _ret = thread::with(|heap| heap.free(ptr));
+            #[cfg(feature = "track-valgrind")]
+            if _ret.is_none() {
+                $crate::track::deallocate(ptr, 0)
+            }
         }
     };
 }
@@ -121,7 +125,7 @@ macro_rules! config_inner {
             /// This function forwards the call to [`Heap::collect`].
             #[inline]
             $vis fn collect(&self, force: bool) {
-                thread::with(|heap| heap.collect(force))
+                thread::with(|heap| heap.collect(force));
             }
 
             $crate::config_stat!($vis);
@@ -143,7 +147,7 @@ macro_rules! config_inner {
             {
                 match thread::with_uninit(|heap| heap.allocate(layout)) {
                     Ok(ptr) => Ok(ptr),
-                    Err(Error::Uninit) => thread::with(|heap| heap.allocate(layout)),
+                    Err(Error::Uninit) => thread::with_init(|heap| heap.allocate(layout)),
                     Err(e) => Err(e),
                 }
             }
@@ -165,7 +169,7 @@ macro_rules! config_inner {
             {
                 match thread::with_uninit(|heap| heap.allocate_zeroed(layout)) {
                     Ok(ptr) => Ok(ptr),
-                    Err(Error::Uninit) => thread::with(|heap| heap.allocate_zeroed(layout)),
+                    Err(Error::Uninit) => thread::with_init(|heap| heap.allocate_zeroed(layout)),
                     Err(e) => Err(e),
                 }
             }
@@ -185,7 +189,7 @@ macro_rules! config_inner {
             /// from the same arena.
             #[inline]
             $vis unsafe fn layout_of(&self, ptr: core::ptr::NonNull<u8>) -> Option<core::alloc::Layout> {
-                thread::with(|heap| heap.layout_of(ptr))
+                thread::with(|heap| heap.layout_of(ptr)).flatten()
             }
 
             /// Deallocates an allocation previously allocated by an instance of this
@@ -198,7 +202,11 @@ macro_rules! config_inner {
             /// See [`core::alloc::Allocator::deallocate`] for more information.
             #[inline]
             $vis unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
-                thread::with(|heap| heap.deallocate(ptr, layout))
+                let _ret = thread::with(|heap| heap.deallocate(ptr, layout));
+                #[cfg(feature = "track-valgrind")]
+                if _ret.is_none() {
+                    $crate::track::deallocate(ptr, 0)
+                }
             }
 
             $crate::config_c!($vis);
@@ -225,7 +233,7 @@ macro_rules! config_inner {
                 ptr: core::ptr::NonNull<u8>,
                 layout: core::alloc::Layout)
             {
-                thread::with(|heap| core::alloc::Allocator::deallocate(&heap, ptr, layout))
+                self.deallocate(ptr, layout)
             }
         }
 

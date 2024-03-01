@@ -19,15 +19,22 @@ macro_rules! thread_statics {
         static mut HEAP: ManuallyDrop<Heap> = ManuallyDrop::new(Heap::new_uninit());
 
         #[inline]
-        pub fn with<T>(f: impl FnOnce(&Heap) -> T) -> T {
-            if !unsafe { HEAP.is_init() } {
-                unsafe {
-                    init();
-                    let cx = CX.write(Context::new(&ARENAS));
-                    HEAP.init(cx);
-                }
+        pub fn with_init<T>(f: impl FnOnce(&Heap) -> T) -> T {
+            debug_assert!(unsafe { !HEAP.is_init() });
+            unsafe {
+                init();
+                let cx = CX.write(Context::new(&ARENAS));
+                HEAP.init(cx);
             }
             f(unsafe { &*core::ptr::addr_of!(HEAP) })
+        }
+
+        #[inline]
+        pub fn with<T>(f: impl FnOnce(&Heap) -> T) -> Option<T> {
+            if unsafe { HEAP.is_init() } {
+                return Some(f(unsafe { &*core::ptr::addr_of!(HEAP) }));
+            }
+            None
         }
 
         pub fn with_uninit<T>(f: impl FnOnce(&Heap) -> T) -> T {
