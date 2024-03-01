@@ -21,12 +21,27 @@ const TRANSFER_COUNT: usize = 1000;
 
 #[derive(Debug, Arbitrary)]
 enum Action {
-    Allocate { size: u32, align_shift: u8 },
-    Deallocate { index: u8 },
-    LayoutOf { index: u8 },
-    Collect { force: bool },
-    Transfer { from: u8, to: u8 },
-    Manage { size: u8 },
+    Allocate {
+        size: u32,
+        align_shift: u8,
+        zeroed: bool,
+    },
+    Deallocate {
+        index: u8,
+    },
+    LayoutOf {
+        index: u8,
+    },
+    Collect {
+        force: bool,
+    },
+    Transfer {
+        from: u8,
+        to: u8,
+    },
+    Manage {
+        size: u8,
+    },
 }
 
 #[global_allocator]
@@ -51,13 +66,13 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
     let mut allocations = Vec::new();
 
     actions.into_iter().for_each(|action| match action {
-        Action::Allocate { size, align_shift } => {
+        Action::Allocate { size, align_shift, zeroed } => {
             let align_shift = align_shift % 24;
             let size = size % 16777216 + 1;
             let align = 1 << align_shift;
             // eprintln!("actual size = {size:#x}, align = {align:#x}");
 
-            if let Some(a) = Allocation::new(size as usize, align) {
+            if let Some(a) = Allocation::new(size as usize, align, zeroed) {
                 allocations.push(a);
             }
         }
@@ -108,13 +123,18 @@ unsafe impl Send for Allocation {}
 unsafe impl Sync for Allocation {}
 
 impl Allocation {
-    fn new(size: usize, align: usize) -> Option<Self> {
+    fn new(size: usize, align: usize, zeroed: bool) -> Option<Self> {
         let layout = Layout::from_size_align(size, align).unwrap();
-        if let Ok(ptr) = Ferroc.allocate(layout) {
-            unsafe { ptr.as_uninit_slice_mut()[size / 2].write(align.ilog2() as u8) };
-            return Some(Allocation { ptr, layout });
-        }
-        None
+        let ptr = match zeroed {
+            false => Ferroc.allocate(layout).ok()?,
+            true => {
+                let ptr = Ferroc.allocate_zeroed(layout).ok()?;
+                assert!(unsafe { ptr.as_ref().iter().all(|&b| b == 0) });
+                ptr
+            }
+        };
+        unsafe { ptr.as_uninit_slice_mut()[size / 2].write(align.ilog2() as u8) };
+        Some(Allocation { ptr, layout })
     }
 
     fn check_layout(&self) {
