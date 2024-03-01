@@ -19,6 +19,12 @@ pub struct Stat {
     pub abandoned_shards: usize,
 }
 
+impl Default for Stat {
+    fn default() -> Self {
+        Self::INIT
+    }
+}
+
 impl Stat {
     pub const INIT: Stat = Stat {
         slabs: 0,

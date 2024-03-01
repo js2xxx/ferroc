@@ -138,7 +138,7 @@ impl Allocation {
     }
 
     fn check_layout(&self) {
-        let req_layout = unsafe { Ferroc.layout_of(self.ptr.cast()) }.unwrap();
+        let req_layout = unsafe { Ferroc.layout_of(self.ptr.cast()) };
         assert!(
             req_layout.size() >= self.layout.size(),
             "ptr = {:p}\nreq = {:#x?}\nl = {:#x?}",

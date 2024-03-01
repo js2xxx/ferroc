@@ -83,12 +83,6 @@ pub(crate) struct Slab<'a> {
     shards: [Shard<'a>; SHARD_COUNT],
 }
 
-impl PartialEq for Slab<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        ptr::eq(self, other)
-    }
-}
-
 impl<'a> Slab<'a> {
     pub(crate) const HEADER_COUNT: usize = mem::size_of::<Slab>().div_ceil(SHARD_SIZE);
 
@@ -254,12 +248,6 @@ pub(crate) struct Shard<'a> {
     free_is_zero: Cell<bool>,
 
     thread_free: AtomicBlockRef<'a>,
-}
-
-impl<'a> PartialEq for Shard<'a> {
-    fn eq(&self, other: &Self) -> bool {
-        ptr::eq(self, other)
-    }
 }
 
 impl<'a> CellLinked<'a> for Shard<'a> {

@@ -80,7 +80,7 @@ pub extern "C" fn pvalloc(size: usize) -> *mut c_void {
 #[cfg_attr(not(sys_alloc), export_name = "fe_malloc_usable_size")]
 pub unsafe extern "C" fn malloc_usable_size(ptr: *mut c_void) -> usize {
     match NonNull::new(ptr) {
-        Some(ptr) => Ferroc.layout_of(ptr.cast()).map_or(0, |l| l.size()),
+        Some(ptr) => Ferroc.layout_of(ptr.cast()).size(),
         None => 0,
     }
 }
@@ -117,9 +117,7 @@ pub unsafe extern "C" fn realloc(ptr: *mut c_void, new_size: usize) -> *mut c_vo
         free(ptr.as_ptr().cast());
         return malloc(new_size);
     }
-    let Some(layout) = Ferroc.layout_of(ptr.cast()) else {
-        return ptr::null_mut();
-    };
+    let layout = Ferroc.layout_of(ptr.cast());
     let old_size = layout.size();
     if (old_size / 2..old_size).contains(&new_size) {
         return ptr.as_ptr();

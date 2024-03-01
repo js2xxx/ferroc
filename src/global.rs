@@ -10,7 +10,7 @@ macro_rules! config_stat {
         ///
         /// This function forwards the call to [`Heap::stat`].
         $vis fn stat(&self) -> $crate::stat::Stat {
-            thread::with(|heap| heap.stat())
+            thread::with(|heap| heap.stat()).unwrap_or_default()
         }
     };
 }
@@ -42,10 +42,10 @@ macro_rules! config_c {
 
         #[inline]
         pub(crate) unsafe fn free(&self, ptr: core::ptr::NonNull<u8>) {
-            let _ret = thread::with(|heap| heap.free(ptr));
-            #[cfg(feature = "track-valgrind")]
-            if _ret.is_none() {
-                $crate::track::deallocate(ptr, 0)
+            match thread::with_uninit(|heap| heap.free(ptr)) {
+                Ok(_) => {}
+                Err(Error::Uninit) => thread::with_init(|heap| heap.free(ptr)).unwrap(),
+                _ => unreachable!()
             }
         }
     };
@@ -189,12 +189,17 @@ macro_rules! config_inner {
             ///
             /// # Safety
             ///
-            /// `ptr` must point to an owned, valid memory block of `layout`, previously
-            /// allocated by a certain instance of `Heap` alive in the scope, created
-            /// from the same arena.
+            /// - `ptr` must point to an owned, valid memory block of `layout`, previously
+            ///   allocated by a certain instance of `Heap` alive in the scope, created
+            ///   from the same arena.
+            /// - The allocation size must not be 0.
             #[inline]
-            $vis unsafe fn layout_of(&self, ptr: core::ptr::NonNull<u8>) -> Option<core::alloc::Layout> {
-                thread::with(|heap| heap.layout_of(ptr)).flatten()
+            $vis unsafe fn layout_of(&self, ptr: core::ptr::NonNull<u8>) -> core::alloc::Layout {
+                match thread::with_uninit(|heap| heap.layout_of(ptr)) {
+                    Ok(layout) => layout,
+                    Err(Error::Uninit) => thread::with_init(|heap| heap.layout_of(ptr)).unwrap(),
+                    _ => unreachable!()
+                }
             }
 
             /// Deallocates an allocation previously allocated by an instance of this
@@ -207,10 +212,10 @@ macro_rules! config_inner {
             /// See [`core::alloc::Allocator::deallocate`] for more information.
             #[inline]
             $vis unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
-                let _ret = thread::with(|heap| heap.deallocate(ptr, layout));
-                #[cfg(feature = "track-valgrind")]
-                if _ret.is_none() {
-                    $crate::track::deallocate(ptr, 0)
+                match thread::with_uninit(|heap| heap.deallocate(ptr, layout)) {
+                    Ok(_) => {}
+                    Err(Error::Uninit) => thread::with_init(|heap| heap.deallocate(ptr, layout)).unwrap(),
+                    _ => unreachable!()
                 }
             }
 

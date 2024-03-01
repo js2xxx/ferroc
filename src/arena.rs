@@ -285,7 +285,7 @@ impl<B: BaseAlloc> Arenas<B> {
                 Ok(arena)
             } else {
                 #[cfg(not(err_on_exhaustion))]
-                panic!("ARENA EXHAUSTED");
+                unreachable!("ARENA EXHAUSTED");
                 #[cfg(err_on_exhaustion)]
                 {
                     // SAFETY: The arena is freshly allocated.
@@ -521,11 +521,8 @@ impl<B: BaseAlloc> Arenas<B> {
             true,
         )?;
         let arena = self.push_arena(arena)?;
-        Ok(NonNull::from_raw_parts(
-            arena.chunk.pointer().cast(),
-            layout.size(),
-        ))
-        .inspect(|&ptr| crate::heap::post_alloc(ptr, B::IS_ZEROED, zero))
+        let ptr = NonNull::from_raw_parts(arena.chunk.pointer().cast(), layout.size());
+        Ok(ptr).inspect(|&ptr| crate::heap::post_alloc(ptr, B::IS_ZEROED, zero))
     }
 
     /// Retrieves the layout information of an allocation.
@@ -540,10 +537,6 @@ impl<B: BaseAlloc> Arenas<B> {
 
     /// Deallocates an allocation previously from this structure.
     ///
-    /// # Panics
-    ///
-    /// Panics if `ptr` is not allocated from this structure.
-    ///
     /// # Safety
     ///
     /// No more aliases to the `ptr` should exist after calling this function.
@@ -557,9 +550,6 @@ impl<B: BaseAlloc> Arenas<B> {
             debug_assert!(!arena.is_null());
             // SAFETY: `arena` is exclusive.
             unsafe { Arena::drop(NonNull::new_unchecked(arena)) }
-        } else {
-            #[cfg(debug_assertions)]
-            panic!("deallocating memory not from these arenas: {ptr:p}")
         }
     }
 }
