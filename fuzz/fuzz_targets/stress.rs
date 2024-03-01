@@ -2,9 +2,18 @@
 #![feature(let_chains)]
 #![feature(ptr_as_uninit)]
 
-use std::{alloc::Layout, iter, ptr::NonNull, sync::Mutex, thread};
+use std::{
+    alloc::Layout,
+    iter,
+    ptr::NonNull,
+    sync::{
+        atomic::{AtomicUsize, Ordering::Relaxed},
+        Mutex,
+    },
+    thread,
+};
 
-use ferroc::Ferroc;
+use ferroc::{base::BaseAlloc, Ferroc};
 use libfuzzer_sys::{arbitrary::Arbitrary, fuzz_target};
 
 const THREADS: usize = 12;
@@ -17,10 +26,14 @@ enum Action {
     LayoutOf { index: u8 },
     Collect { force: bool },
     Transfer { from: u8, to: u8 },
+    Manage { size: u8 },
 }
 
 #[global_allocator]
 static FERROC: Ferroc = Ferroc;
+
+static MANAGED: AtomicUsize = AtomicUsize::new(0);
+const MAX_MANAGED: usize = 20;
 
 fuzz_target!(|action_sets: [Vec<Action>; THREADS]| {
     let transfers: Vec<_> = iter::repeat_with(|| Mutex::new(None))
@@ -68,6 +81,19 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
                 if let Some(a) = o {
                     allocations.push(a);
                 }
+            }
+        }
+        Action::Manage { size } => {
+            let managed = MANAGED.load(Relaxed);
+            if managed < MAX_MANAGED
+                && MANAGED
+                    .compare_exchange(managed, managed + 1, Relaxed, Relaxed)
+                    .is_ok()
+            {
+                let size = (size % 10 + 1) as usize;
+                let layout = Layout::from_size_align(size << 22, 1 << 22).unwrap();
+                let chunk = Ferroc.base().allocate(layout, false).unwrap();
+                Ferroc.manage(chunk).unwrap();
             }
         }
     });

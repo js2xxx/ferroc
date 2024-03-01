@@ -589,7 +589,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         // SAFETY: `ptr` is in `slab`.
         let (shard, block) = unsafe { Slab::shard_infos(slab, ptr.cast()) };
         let obj_size = unsafe { Shard::obj_size_raw(shard) };
-        let size = obj_size - (block.into_raw().addr().get() - ptr.addr().get());
+        let size = obj_size - (ptr.addr().get() - block.into_raw().addr().get());
         let align = 1 << ptr.addr().get().trailing_zeros();
         Some(Layout::from_size_align(size, align).unwrap())
     }

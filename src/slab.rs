@@ -106,16 +106,16 @@ impl<'a> Slab<'a> {
     }
 
     pub(crate) fn collect_abandoned(&self) -> bool {
-        debug_assert!(self.is_abandoned());
-        self.shards().any(|shard| {
-            let was_unused = shard.is_unused();
-            shard.collect(false);
-            if !was_unused && shard.is_unused() {
-                self.abandoned.set(self.abandoned.get() - 1);
-                self.used.set(self.used.get() - 1);
-            }
-            self.used.get() == 0
-        })
+        !self.is_abandoned()
+            || self.shards().any(|shard| {
+                let was_unused = shard.is_unused();
+                shard.collect(false);
+                if !was_unused && shard.is_unused() {
+                    self.abandoned.set(self.abandoned.get() - 1);
+                    self.used.set(self.used.get() - 1);
+                }
+                self.used.get() == 0
+            })
     }
 
     /// # Safety

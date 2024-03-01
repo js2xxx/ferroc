@@ -164,7 +164,8 @@ mod test {
     use std::{thread, vec};
 
     use crate::{
-        arena::{SHARD_SIZE, SLAB_SIZE},
+        arena::{slab_layout, SHARD_SIZE, SLAB_SIZE},
+        base::BaseAlloc,
         Ferroc,
     };
 
@@ -198,6 +199,12 @@ mod test {
         let layout = Layout::from_size_align(12345, SLAB_SIZE * 2).unwrap();
         let ptr = Ferroc.allocate(layout).unwrap();
         unsafe { Ferroc.deallocate(ptr.cast(), layout) }
+    }
+
+    #[test]
+    fn manage() {
+        let chunk = Ferroc.base().allocate(slab_layout(5), false).unwrap();
+        Ferroc.manage(chunk).unwrap();
     }
 
     #[test]
