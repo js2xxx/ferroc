@@ -268,6 +268,7 @@ impl<B: BaseAlloc> Arenas<B> {
                     index = i;
                     continue;
                 }
+                arena.arena_id = index + 1;
                 if self.arenas[index]
                     .compare_exchange(ptr::null_mut(), arena, AcqRel, Acquire)
                     .is_err()
@@ -275,13 +276,12 @@ impl<B: BaseAlloc> Arenas<B> {
                     index = self.arena_count.load(Relaxed);
                     continue;
                 }
-                arena.arena_id = index + 1;
                 Ok(arena)
-            } else if let Some(index) = self.arenas.iter().position(|slot| {
+            } else if self.arenas.iter().enumerate().any(|(index, slot)| {
+                arena.arena_id = index + 1;
                 slot.compare_exchange(ptr::null_mut(), arena, AcqRel, Acquire)
                     .is_ok()
             }) {
-                arena.arena_id = index + 1;
                 Ok(arena)
             } else {
                 #[cfg(not(err_on_exhaustion))]

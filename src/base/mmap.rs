@@ -1,5 +1,10 @@
-use core::{alloc::Layout, mem::ManuallyDrop, ptr::NonNull};
+use core::alloc::Layout;
+#[cfg(miri)]
+use core::alloc::{AllocError, Allocator};
+#[cfg(not(miri))]
+use core::{mem::ManuallyDrop, ptr::NonNull};
 
+#[cfg(not(miri))]
 use memmap2::MmapMut;
 
 use super::{BaseAlloc, Chunk};
@@ -19,6 +24,7 @@ impl Mmap {
     }
 }
 
+#[cfg(not(miri))]
 unsafe impl BaseAlloc for Mmap {
     const IS_ZEROED: bool = true;
 
@@ -71,5 +77,25 @@ unsafe impl BaseAlloc for Mmap {
         unsafe {
             libc::madvise(ptr.as_ptr().cast(), len, libc::MADV_DONTNEED)
         };
+    }
+}
+
+#[cfg(miri)]
+unsafe impl BaseAlloc for Mmap {
+    const IS_ZEROED: bool = true;
+
+    type Error = AllocError;
+    type Handle = ();
+
+    fn allocate(&self, layout: Layout, _commit: bool) -> Result<Chunk<Self>, Self::Error> {
+        let layout = layout.pad_to_align();
+        let ptr = std::alloc::System.allocate_zeroed(layout)?;
+
+        // SAFETY: `Chunk` is allocated from self.
+        Ok(unsafe { Chunk::new(ptr.cast(), layout, ()) })
+    }
+
+    unsafe fn deallocate(chunk: &mut Chunk<Self>) {
+        unsafe { std::alloc::System.deallocate(chunk.ptr, chunk.layout) }
     }
 }

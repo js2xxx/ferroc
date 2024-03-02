@@ -115,6 +115,7 @@
 //! method on the default allocator or other instances like
 //! [`Heap`](crate::heap::Heap).
 #![no_std]
+#![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
 #![feature(if_let_guard)]
 #![feature(isqrt)]
@@ -130,7 +131,7 @@
 #![cfg_attr(feature = "global", feature(allow_internal_unsafe))]
 #![cfg_attr(feature = "global", feature(allow_internal_unstable))]
 
-#[cfg(any(test, feature = "base-mmap"))]
+#[cfg(any(test, miri, feature = "base-mmap"))]
 extern crate std;
 
 pub mod arena;
@@ -161,35 +162,39 @@ pub use self::stat::Stat;
 #[cfg(test)]
 mod test {
     use core::alloc::Layout;
-    use std::{thread, vec};
+    use std::{thread, vec::Vec};
 
+    #[cfg(not(miri))]
+    use crate::arena::SHARD_SIZE;
     use crate::{
-        arena::{slab_layout, SHARD_SIZE, SLAB_SIZE},
+        arena::{slab_layout, SLAB_SIZE},
         base::BaseAlloc,
         Ferroc,
     };
 
-    #[global_allocator]
-    static FERROC: Ferroc = Ferroc;
-
     #[test]
     fn basic() {
-        let mut vec = vec![1, 2, 3, 4];
+        let mut vec = Vec::new_in(Ferroc);
+        vec.extend([1, 2, 3, 4]);
         vec.extend([5, 6, 7, 8]);
         assert_eq!(vec.iter().sum::<i32>(), 10 + 26);
         drop(vec);
     }
 
+    #[cfg(not(miri))]
     #[test]
     fn large() {
-        let mut vec = vec![0u8; 5 * SHARD_SIZE];
+        let mut vec = Vec::new_in(Ferroc);
+        vec.extend([0u8; 5 * SHARD_SIZE]);
         vec[2 * SHARD_SIZE] = 123;
         drop(vec);
     }
 
+    #[cfg(not(miri))]
     #[test]
     fn huge() {
-        let mut vec = vec![0u8; SLAB_SIZE + 5 * SHARD_SIZE];
+        let mut vec = Vec::new_in(Ferroc);
+        vec.extend([0u8; SLAB_SIZE + 5 * SHARD_SIZE]);
         vec[SLAB_SIZE / 2] = 123;
         drop(vec);
     }
@@ -210,7 +215,8 @@ mod test {
     #[test]
     fn multithread() {
         let j = thread::spawn(move || {
-            let mut vec = vec![0u8; 100];
+            let mut vec = Vec::new_in(Ferroc);
+            vec.extend([0u8; 100]);
             vec.extend([1; 100]);
             vec
         });

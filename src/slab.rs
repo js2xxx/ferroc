@@ -215,12 +215,42 @@ impl<'a> Slab<'a> {
         let (first, rest) = shards[Self::HEADER_COUNT..]
             .split_first_mut()
             .unwrap_unchecked();
-        first.write(Shard::new(SHARD_COUNT - Self::HEADER_COUNT, free_is_zero));
-        for s in rest {
-            s.write(Shard::new(0, free_is_zero));
+        first.write(Shard::new(
+            ptr.cast(),
+            Self::HEADER_COUNT,
+            SHARD_COUNT - Self::HEADER_COUNT,
+            free_is_zero,
+        ));
+        for (index, s) in rest.iter_mut().enumerate() {
+            s.write(Shard::new(
+                ptr.cast(),
+                index + Self::HEADER_COUNT + 1,
+                0,
+                free_is_zero,
+            ));
         }
 
         SlabRef(ptr.cast(), PhantomData)
+    }
+}
+
+/// Cache some results of pointer arithmetics for both performance and
+/// additional provenance information.
+struct ShardHeader<'a> {
+    #[cfg(miri)]
+    slab: NonNull<Slab<'a>>,
+    shard_area: NonNull<u8>,
+    marker: PhantomData<&'a ()>,
+}
+
+impl<'a> Default for ShardHeader<'a> {
+    fn default() -> Self {
+        Self {
+            #[cfg(miri)]
+            slab: NonNull::dangling(),
+            shard_area: NonNull::dangling(),
+            marker: PhantomData,
+        }
     }
 }
 
@@ -232,6 +262,8 @@ impl<'a> Slab<'a> {
 /// from [`Slab`].
 #[derive(Default)]
 pub(crate) struct Shard<'a> {
+    header: ShardHeader<'a>,
+
     link: CellLink<'a, Self>,
     shard_count: Cell<usize>,
     is_committed: Cell<bool>,
@@ -257,8 +289,19 @@ impl<'a> CellLinked<'a> for Shard<'a> {
 }
 
 impl<'a> Shard<'a> {
-    pub(crate) fn new(shard_count: usize, free_is_zero: bool) -> Self {
+    pub(crate) unsafe fn new(
+        slab: NonNull<Slab<'a>>,
+        index: usize,
+        shard_count: usize,
+        free_is_zero: bool,
+    ) -> Self {
         Shard {
+            header: ShardHeader {
+                #[cfg(miri)]
+                slab,
+                shard_area: Slab::shard_area(slab, index),
+                marker: PhantomData,
+            },
             shard_count: Cell::new(shard_count),
             free_is_zero: Cell::new(free_is_zero),
             ..Default::default()
@@ -384,8 +427,18 @@ impl<'a> Shard<'a> {
 impl<'a> Shard<'a> {
     pub(crate) fn slab(&self) -> (&'a Slab<'a>, usize) {
         // SAFETY: A shard cannot be manually used on the stack.
+        //
+        // Every shard only associates with one slab, which resides exactly on the
+        // address by pointer arithmetics. Miri doesn't recognize this, so we provide it
+        // with additional provenance information.
         let slab = unsafe { Slab::from_ptr(self.into()).unwrap_unchecked() };
+        #[cfg(not(miri))]
         let slab = unsafe { slab.as_ref() };
+        #[cfg(miri)]
+        let slab = unsafe {
+            assert_eq!(slab, self.header.slab);
+            self.header.slab.as_ref()
+        };
         // SAFETY: `self` must reside in the `shards` array in its `Slab`.
         let index = unsafe { (self as *const Self).sub_ptr(slab.shards.as_ptr()) };
         (slab, index)
@@ -402,12 +455,9 @@ impl<'a> Shard<'a> {
 
         let count = limit.min(cap_limit - capacity);
         debug_assert!(count > 0);
-
-        let (slab, index) = self.slab();
-        // SAFETY: `slab` is valid.
-        let area = unsafe { Slab::shard_area(slab.into(), index) };
         debug_assert!(capacity + count <= cap_limit);
 
+        let area = self.header.shard_area;
         // SAFETY: the `area` is owned by this shard in a similar way to `Cell<[u8]>`.
         let iter = (capacity..capacity + count)
             .map(|index| unsafe { BlockRef::new(area.add(index * obj_size).cast()) });
@@ -457,9 +507,7 @@ impl<'a> Shard<'a> {
         self.used.set(0);
 
         if !self.is_committed.replace(true) {
-            let (slab, index) = self.slab();
-            // SAFETY: `slab` is valid.
-            let area = unsafe { Slab::shard_area(slab.into(), index) };
+            let area = self.header.shard_area;
             unsafe { base.commit(NonNull::from_raw_parts(area.cast(), usable_size)) }
                 .map_err(Error::Commit)?;
         }
@@ -482,15 +530,13 @@ impl<'a> Shard<'a> {
             return Ok(None);
         }
 
-        let (slab, index) = self.slab();
         #[cfg(feature = "stat")]
         {
             _stat.shards += 1;
         }
 
         if !self.is_committed.replace(true) {
-            // SAFETY: `slab` is valid.
-            let area = unsafe { Slab::shard_area(slab.into(), index) };
+            let area = self.header.shard_area;
             unsafe { base.commit(NonNull::from_raw_parts(area.cast(), SHARD_SIZE)) }
                 .map_err(Error::Commit)?;
         }
@@ -500,6 +546,7 @@ impl<'a> Shard<'a> {
         self.cap_limit.set(cap_limit);
         self.has_aligned.store(false, Relaxed);
 
+        let (slab, index) = self.slab();
         let shard_count = self.shard_count.replace(1) - 1;
         debug_assert!(shard_count + index < SHARD_COUNT);
         let next_shard = (shard_count > 0)

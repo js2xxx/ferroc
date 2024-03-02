@@ -45,7 +45,7 @@ macro_rules! config_c {
             match thread::with_uninit(|heap| heap.free(ptr)) {
                 Ok(_) => {}
                 Err(Error::Uninit) => thread::with_init(|heap| heap.free(ptr)).unwrap(),
-                _ => unreachable!()
+                _ => unreachable!(),
             }
         }
     };
@@ -61,6 +61,7 @@ macro_rules! config_c {
 #[macro_export]
 #[doc(hidden)]
 #[allow_internal_unstable(allocator_api)]
+#[allow_internal_unstable(strict_provenance)]
 #[allow_internal_unsafe]
 macro_rules! config_inner {
     (@TYPES $vis:vis, $bt:ty) => {
