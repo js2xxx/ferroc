@@ -12,17 +12,17 @@ use ferroc::Ferroc;
 
 const COOKIE: usize = 0xbf58476d1ce4e5b9;
 const THREADS: usize = 6;
-#[cfg(not(miri))]
+#[cfg(not(any(miri, debug_assertions)))]
 const SCALE: usize = 5000;
-#[cfg(miri)]
+#[cfg(any(miri, debug_assertions))]
 const SCALE: usize = 10;
-#[cfg(not(miri))]
+#[cfg(not(any(miri, debug_assertions)))]
 const ITER: usize = 25;
-#[cfg(miri)]
+#[cfg(any(miri, debug_assertions))]
 const ITER: usize = 1;
-#[cfg(not(miri))]
+#[cfg(not(any(miri, debug_assertions)))]
 const TRANSFER_COUNT: usize = 1000;
-#[cfg(miri)]
+#[cfg(any(miri, debug_assertions))]
 const TRANSFER_COUNT: usize = 20;
 
 #[cfg(feature = "track-valgrind")]
@@ -31,7 +31,7 @@ static FERROC: Ferroc = Ferroc;
 
 fn main() {
     println!("ferroc: {:?}", do_bench(&Ferroc));
-    #[cfg(not(any(feature = "track-valgrind", miri)))]
+    #[cfg(not(any(feature = "track-valgrind", any(miri, debug_assertions))))]
     println!("system: {:?}", do_bench(&std::alloc::System));
 }
 
@@ -40,7 +40,7 @@ fn do_bench<A: Allocator + Send + Sync>(a: &A) -> Duration {
         .take(TRANSFER_COUNT)
         .collect();
     let start = Instant::now();
-    for _ in 0..ITER {
+    for _i in 0..ITER {
         thread::scope(|s| {
             let transfer = &transfer;
             for tid in 0..THREADS {

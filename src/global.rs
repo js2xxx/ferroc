@@ -33,18 +33,13 @@ macro_rules! config_c {
             size: core::num::NonZeroUsize,
             zero: bool,
         ) -> Result<core::ptr::NonNull<[u8]>, Error> {
-            match thread::with_uninit(|heap| heap.malloc(size, zero)) {
-                Ok(ptr) => Ok(ptr),
-                Err(Error::Uninit) => thread::with_init(|heap| heap.malloc(size, zero)),
-                Err(e) => Err(e),
-            }
+            thread::with_lazy(|heap| heap.malloc(size, zero))
         }
 
         #[inline]
         pub(crate) unsafe fn free(&self, ptr: core::ptr::NonNull<u8>) {
-            match thread::with_uninit(|heap| heap.free(ptr)) {
+            match thread::with_lazy(|heap| heap.free(ptr)) {
                 Ok(_) => {}
-                Err(Error::Uninit) => thread::with_init(|heap| heap.free(ptr)).unwrap(),
                 _ => unreachable!(),
             }
         }
@@ -80,9 +75,13 @@ macro_rules! config_inner {
         #[doc = concat!("The error type of the `", stringify!($bt), "` backend.")]
         #[doc = concat!("\n\nSee [`Error`](", stringify!($crate), "::arena::Error) for more information.")]
         $vis type Error = $crate::arena::Error<$bt>;
+        #[doc = concat!("The thread-local heap collection of the `", stringify!($bt), "` backend.")]
+        #[doc = concat!("\n\nSee [`ThreadLocal`](", stringify!($crate), "::heap::ThreadLocal) for more information.")]
+        $vis type ThreadLocal<'arena> = $crate::heap::ThreadLocal<'arena, $bt>;
     };
     (@ARENA $vis:vis, $bs:expr) => {
         static ARENAS: Arenas = Arenas::new($bs);
+        pub static THREAD_LOCALS: ThreadLocal<'static> = ThreadLocal::new(&ARENAS);
     };
     (@DEF $vis:vis, $name:ident, $bt:ty) => {
         #[doc = concat!("The configured allocator backed by `", stringify!($bt), "`.\n\n")]
@@ -151,11 +150,7 @@ macro_rules! config_inner {
             $vis fn allocate(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, Error>
             {
-                match thread::with_uninit(|heap| heap.allocate(layout)) {
-                    Ok(ptr) => Ok(ptr),
-                    Err(Error::Uninit) => thread::with_init(|heap| heap.allocate(layout)),
-                    Err(e) => Err(e),
-                }
+                thread::with_lazy(|heap| heap.allocate(layout))
             }
 
             /// Allocate a zeroed memory block of `layout` from the current heap.
@@ -173,11 +168,7 @@ macro_rules! config_inner {
             $vis fn allocate_zeroed(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, Error>
             {
-                match thread::with_uninit(|heap| heap.allocate_zeroed(layout)) {
-                    Ok(ptr) => Ok(ptr),
-                    Err(Error::Uninit) => thread::with_init(|heap| heap.allocate_zeroed(layout)),
-                    Err(e) => Err(e),
-                }
+                thread::with_lazy(|heap| heap.allocate_zeroed(layout))
             }
 
             /// Retrieves the layout information of a specific allocation.
@@ -196,9 +187,8 @@ macro_rules! config_inner {
             /// - The allocation size must not be 0.
             #[inline]
             $vis unsafe fn layout_of(&self, ptr: core::ptr::NonNull<u8>) -> core::alloc::Layout {
-                match thread::with_uninit(|heap| heap.layout_of(ptr)) {
+                match thread::with_lazy(|heap| heap.layout_of(ptr)) {
                     Ok(layout) => layout,
-                    Err(Error::Uninit) => thread::with_init(|heap| heap.layout_of(ptr)).unwrap(),
                     _ => unreachable!()
                 }
             }
@@ -213,9 +203,8 @@ macro_rules! config_inner {
             /// See [`core::alloc::Allocator::deallocate`] for more information.
             #[inline]
             $vis unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
-                match thread::with_uninit(|heap| heap.deallocate(ptr, layout)) {
+                match thread::with_lazy(|heap| heap.deallocate(ptr, layout)) {
                     Ok(_) => {}
-                    Err(Error::Uninit) => thread::with_init(|heap| heap.deallocate(ptr, layout)).unwrap(),
                     _ => unreachable!()
                 }
             }

@@ -117,6 +117,7 @@
 #![no_std]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
+#![feature(const_pin)]
 #![feature(if_let_guard)]
 #![feature(isqrt)]
 #![feature(let_chains)]
