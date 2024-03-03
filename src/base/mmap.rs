@@ -1,10 +1,5 @@
-use core::alloc::Layout;
-#[cfg(miri)]
-use core::alloc::{AllocError, Allocator};
-#[cfg(not(miri))]
-use core::{mem::ManuallyDrop, ptr::NonNull};
+use core::{alloc::Layout, mem::ManuallyDrop, ptr::NonNull};
 
-#[cfg(not(miri))]
 use memmap2::MmapMut;
 
 use super::{BaseAlloc, Chunk};
@@ -24,7 +19,6 @@ impl Mmap {
     }
 }
 
-#[cfg(not(miri))]
 unsafe impl BaseAlloc for Mmap {
     const IS_ZEROED: bool = true;
 
@@ -38,7 +32,7 @@ unsafe impl BaseAlloc for Mmap {
 
         let layout = layout.pad_to_align();
         let mut options = memmap2::MmapOptions::new();
-        if commit {
+        if cfg!(not(miri)) && commit {
             options.populate();
         }
         let mut trial = options.len(layout.size()).map_anon()?;
@@ -60,42 +54,20 @@ unsafe impl BaseAlloc for Mmap {
         unsafe { ManuallyDrop::drop(&mut chunk.handle) }
     }
 
+    #[cfg(all(unix, not(miri)))]
     unsafe fn commit(&self, ptr: NonNull<[u8]>) -> Result<(), Self::Error> {
         let (ptr, len) = ptr.to_raw_parts();
         // SAFETY: The corresponding memory area is going to be used.
-        #[cfg(unix)]
         match unsafe { libc::madvise(ptr.as_ptr().cast(), len, libc::MADV_WILLNEED) } {
             0 => Ok(()),
             _ => Err(std::io::Error::last_os_error()),
         }
     }
 
+    #[cfg(all(unix, not(miri)))]
     unsafe fn decommit(&self, ptr: NonNull<[u8]>) {
         let (ptr, len) = ptr.to_raw_parts();
         // SAFETY: The corresponding memory area is going to be disposed.
-        #[cfg(unix)]
-        unsafe {
-            libc::madvise(ptr.as_ptr().cast(), len, libc::MADV_DONTNEED)
-        };
-    }
-}
-
-#[cfg(miri)]
-unsafe impl BaseAlloc for Mmap {
-    const IS_ZEROED: bool = true;
-
-    type Error = AllocError;
-    type Handle = ();
-
-    fn allocate(&self, layout: Layout, _commit: bool) -> Result<Chunk<Self>, Self::Error> {
-        let layout = layout.pad_to_align();
-        let ptr = std::alloc::System.allocate_zeroed(layout)?;
-
-        // SAFETY: `Chunk` is allocated from self.
-        Ok(unsafe { Chunk::new(ptr.cast(), layout, ()) })
-    }
-
-    unsafe fn deallocate(chunk: &mut Chunk<Self>) {
-        unsafe { std::alloc::System.deallocate(chunk.ptr, chunk.layout) }
+        unsafe { libc::madvise(ptr.as_ptr().cast(), len, libc::MADV_DONTNEED) };
     }
 }

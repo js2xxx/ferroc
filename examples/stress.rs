@@ -12,9 +12,18 @@ use ferroc::Ferroc;
 
 const COOKIE: usize = 0xbf58476d1ce4e5b9;
 const THREADS: usize = 6;
-const SCALE: usize = 50;
+#[cfg(not(miri))]
+const SCALE: usize = 5000;
+#[cfg(miri)]
+const SCALE: usize = 10;
+#[cfg(not(miri))]
 const ITER: usize = 25;
+#[cfg(miri)]
+const ITER: usize = 1;
+#[cfg(not(miri))]
 const TRANSFER_COUNT: usize = 1000;
+#[cfg(miri)]
+const TRANSFER_COUNT: usize = 20;
 
 #[cfg(feature = "track-valgrind")]
 #[global_allocator]
@@ -22,7 +31,7 @@ static FERROC: Ferroc = Ferroc;
 
 fn main() {
     println!("ferroc: {:?}", do_bench(&Ferroc));
-    #[cfg(not(feature = "track-valgrind"))]
+    #[cfg(not(any(feature = "track-valgrind", miri)))]
     println!("system: {:?}", do_bench(&std::alloc::System));
 }
 
@@ -38,15 +47,14 @@ fn do_bench<A: Allocator + Send + Sync>(a: &A) -> Duration {
                 s.spawn(move || bench_one(tid, transfer, a));
             }
         });
-        (transfer.iter_mut().filter(|_| probably(50)))
-            .for_each(|t| drop(t.get_mut().unwrap().take()))
+        (transfer.iter_mut().filter(|_| probably(50))).for_each(|t| *t.get_mut().unwrap() = None)
     }
     drop(transfer);
     start.elapsed()
 }
 
 fn bench_one<'a, A: Allocator>(tid: usize, transfer: &[Mutex<Option<Items<&'a A>>>], a: &'a A) {
-    let mut alloc_count: usize = 100 * SCALE * (tid % 8 + 1);
+    let mut alloc_count: usize = SCALE * (tid % 8 + 1);
     let mut retain_count: usize = alloc_count / 2;
 
     let mut retained = Vec::with_capacity_in(retain_count, a);
@@ -63,7 +71,7 @@ fn bench_one<'a, A: Allocator>(tid: usize, transfer: &[Mutex<Option<Items<&'a A>
 
         if probably(67) && !data.is_empty() {
             let index = fastrand::usize(0..data.len());
-            drop(data[index].take());
+            data[index] = None;
         }
 
         if probably(25) && !data.is_empty() {

@@ -753,7 +753,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
 impl<'arena: 'cx, 'cx, B: BaseAlloc> Drop for Heap<'arena, 'cx, B> {
     fn drop(&mut self) {
-        if let Some(cx) = self.cx {
+        if let Some(cx) = self.cx.take() {
             #[cfg(feature = "stat")]
             let mut stat = cx.stat.borrow_mut();
             #[cfg(not(feature = "stat"))]

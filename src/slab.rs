@@ -144,9 +144,7 @@ impl<'a> Slab<'a> {
         } else {
             Self::HEADER_COUNT
         };
-        let shard = shards
-            .cast::<Shard<'a>>()
-            .with_addr(shards.addr() + index * mem::size_of::<Shard<'a>>());
+        let shard = shards.cast::<Shard<'a>>().add(index);
         (unsafe { NonNull::new_unchecked(shard.cast_mut()) }, index)
     }
 
@@ -204,7 +202,6 @@ impl<'a> Slab<'a> {
         addr_of_mut!((*slab).size).write(ptr.len());
         addr_of_mut!((*slab).used).write(Cell::new(0));
         addr_of_mut!((*slab).abandoned).write(Cell::new(0));
-        addr_of_mut!((*slab).abandoned_next).write(ptr::null_mut::<()>().into());
 
         let shards: &mut [MaybeUninit<Shard<'a>>; SHARD_COUNT] = mem::transmute(
             addr_of_mut!((*slab).shards)

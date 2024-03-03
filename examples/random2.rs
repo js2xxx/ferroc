@@ -13,8 +13,14 @@ use ferroc::Ferroc;
 
 const BLOCK_SIZE: Range<usize> = 8..1000;
 const ROUND: usize = 100;
+#[cfg(not(miri))]
 const BLOCK_COUNT: usize = 5000;
+#[cfg(miri)]
+const BLOCK_COUNT: usize = 20;
+#[cfg(not(miri))]
 const THREADS: usize = 12;
+#[cfg(miri)]
+const THREADS: usize = 2;
 const SLEEP: Duration = Duration::from_secs(5);
 
 #[global_allocator]
@@ -22,7 +28,7 @@ static FERROC: Ferroc = Ferroc;
 
 fn main() {
     println!("ferroc: {:.3?}", do_bench(&Ferroc));
-    #[cfg(not(feature = "track-valgrind"))]
+    #[cfg(not(any(feature = "track-valgrind", miri)))]
     println!("system: {:.3?}", do_bench(&std::alloc::System));
 }
 
