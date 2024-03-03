@@ -20,12 +20,18 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+
+      - name: Cache fuzzing data
+        uses: actions/cache@v3
         with:
-          cache-all-crates: true
-          cache-directories: |
-            "./fuzz/artifacts"
-            "./fuzz/corpus"
-            "./fuzz/coverage"
+          key: ${{ runner.os }}-fuzz-${{ hashFiles('./fuzz/corpus/*') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-
+            ${{ runner.os }}-
+          path: |
+            ./fuzz/artifacts
+            ./fuzz/corpus
+            ./fuzz/coverage
 
       - name: Install fuzzing utilities
         run: |
