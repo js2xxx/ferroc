@@ -54,7 +54,7 @@ impl<'a> BlockRef<'a> {
     }
 
     pub fn take_next(&mut self) -> Option<Self> {
-        let ptr = self.0.cast();
+        let ptr = self.0.cast::<Option<NonNull<()>>>();
         track::defined(self.0.cast(), Self::SLOT_SIZE);
         // SAFETY: this structure contains a valid `next` pointer.
         let next = unsafe { ptr.read() };
