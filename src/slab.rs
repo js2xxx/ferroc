@@ -90,10 +90,6 @@ impl<'a> Slab<'a> {
         self.abandoned.get() == self.used.get() && self.abandoned.get() > 0
     }
 
-    pub(crate) fn inc_used(&self) {
-        self.used.set(self.used.get() + 1);
-    }
-
     fn shards(&self) -> impl Iterator<Item = &Shard<'a>> {
         let inner = self.shards[Self::HEADER_COUNT..].iter();
         inner.take_while(|shard| shard.shard_count.get() > 0)
@@ -240,6 +236,17 @@ struct ShardHeader<'a> {
     marker: PhantomData<&'a ()>,
 }
 
+impl<'a> ShardHeader<'a> {
+    const fn dangling() -> Self {
+        Self {
+            #[cfg(miri)]
+            slab: NonNull::dangling(),
+            shard_area: NonNull::dangling(),
+            marker: PhantomData,
+        }
+    }
+}
+
 impl<'a> Default for ShardHeader<'a> {
     fn default() -> Self {
         Self {
@@ -250,6 +257,42 @@ impl<'a> Default for ShardHeader<'a> {
         }
     }
 }
+
+// We guarantee that the reference from this structure cannot be mutated inside,
+// since empty shards cannot allocate anything and thus cannot deallocate
+// anything either.
+pub(crate) struct EmptyShard(Shard<'static>);
+
+impl EmptyShard {
+    pub(crate) const fn as_ref(&self) -> &Shard<'_> {
+        let ptr = &self.0 as *const Shard<'static>;
+        // The inability to mutate the inner shard ensures that EMPTY shards are
+        // covariant.
+        unsafe { &*ptr.cast::<Shard<'_>>() }
+    }
+}
+
+// The inability to mutate the inner shard ensures that EMPTY shards are
+// shareable among threads.
+unsafe impl Sync for EmptyShard {}
+
+#[allow(clippy::declare_interior_mutable_const)]
+pub(crate) static EMPTY_SHARD: EmptyShard = EmptyShard(Shard {
+    header: ShardHeader::dangling(),
+    link: CellLink::new(),
+    shard_count: Cell::new(1),
+    is_committed: Cell::new(false),
+    obj_size: AtomicUsize::new(0),
+    cap_limit: Cell::new(0),
+    capacity: Cell::new(0),
+    free: Cell::new(None),
+    local_free: Cell::new(None),
+    used: Cell::new(0),
+    is_in_full: Cell::new(false),
+    has_aligned: AtomicBool::new(false),
+    free_is_zero: Cell::new(false),
+    thread_free: AtomicBlockRef::new(),
+});
 
 /// A linked list of memory blocks of the same size.
 ///
@@ -313,8 +356,8 @@ impl<'a> Shard<'a> {
         self.used.get() == 0
     }
 
-    pub(crate) fn is_full(&self) -> bool {
-        self.used.get() == self.capacity.get()
+    pub(crate) fn has_free(&self) -> bool {
+        unsafe { (*self.free.as_ptr()).is_some() }
     }
 
     pub(crate) unsafe fn obj_size_raw(this: NonNull<Self>) -> usize {
@@ -399,24 +442,28 @@ impl<'a> Shard<'a> {
     }
 
     pub(crate) fn collect(&self, force: bool) -> bool {
-        self.collect_thread_free();
+        if force || !self.thread_free.get().load(Relaxed).is_null() {
+            self.collect_thread_free();
+        }
 
-        let Some(local_free) = self.local_free.take() else {
-            return !self.is_full();
-        };
-        let free = if let Some(mut free) = self.free.take() {
-            if !force {
-                self.local_free.set(Some(local_free));
-            } else {
-                free.set_tail(Some(local_free));
-                self.free_is_zero.set(false);
-            }
-            free
-        } else {
-            self.free_is_zero.set(false);
-            local_free
-        };
-        self.free.set(Some(free));
+        match self.local_free.take() {
+            Some(lfree) => match self.free.take() {
+                None => {
+                    self.free_is_zero.set(false);
+                    self.free.set(Some(lfree));
+                }
+                Some(ofree) if !force => {
+                    self.local_free.set(Some(lfree));
+                    self.free.set(Some(ofree));
+                }
+                Some(mut ofree) => {
+                    ofree.set_tail(Some(lfree));
+                    self.free_is_zero.set(false);
+                    self.free.set(Some(ofree));
+                }
+            },
+            None => return self.has_free(),
+        }
         true
     }
 }
@@ -470,12 +517,9 @@ impl<'a> Shard<'a> {
     }
 
     #[inline]
-    pub(crate) fn extend(&self) {
-        self.extend_inner(
-            self.obj_size.load(Relaxed),
-            self.capacity.get(),
-            self.cap_limit.get(),
-        )
+    pub(crate) fn extend(&self, obj_size: usize) {
+        debug_assert_eq!(obj_size, self.obj_size.load(Relaxed));
+        self.extend_inner(obj_size, self.capacity.get(), self.cap_limit.get())
     }
 
     pub(crate) fn init_large_or_huge<B: BaseAlloc>(
@@ -491,6 +535,8 @@ impl<'a> Shard<'a> {
         {
             _stat.shards += 1;
         }
+        let (slab, _) = self.slab();
+        slab.used.set(slab.used.get() + 1);
 
         self.obj_size.store(obj_size, Relaxed);
         let usable_size = SLAB_SIZE * slab_count.get() - SHARD_SIZE * Slab::HEADER_COUNT;
@@ -527,9 +573,30 @@ impl<'a> Shard<'a> {
             return Ok(None);
         }
 
+        let (slab, index) = self.slab();
+        slab.used.set(slab.used.get() + 1);
+        let shard_count = self.shard_count.replace(1) - 1;
+        debug_assert!(shard_count + index < SHARD_COUNT);
+        let next_shard = (shard_count > 0)
+            .then(|| &slab.shards[index + 1])
+            .inspect(|next_shard| next_shard.shard_count.set(shard_count));
+
         #[cfg(feature = "stat")]
         {
             _stat.shards += 1;
+        }
+
+        let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
+        let cap_limit = SHARD_SIZE / obj_size;
+        self.cap_limit.set(cap_limit);
+        self.has_aligned.store(false, Relaxed);
+
+        self.capacity.set(0);
+        self.free.set(None);
+        self.local_free.set(None);
+        self.used.set(0);
+        if old_obj_size != 0 {
+            self.free_is_zero.set(false);
         }
 
         if !self.is_committed.replace(true) {
@@ -538,28 +605,7 @@ impl<'a> Shard<'a> {
                 .map_err(Error::Commit)?;
         }
 
-        let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
-        let cap_limit = SHARD_SIZE / obj_size;
-        self.cap_limit.set(cap_limit);
-        self.has_aligned.store(false, Relaxed);
-
-        let (slab, index) = self.slab();
-        let shard_count = self.shard_count.replace(1) - 1;
-        debug_assert!(shard_count + index < SHARD_COUNT);
-        let next_shard = (shard_count > 0)
-            .then(|| &slab.shards[index + 1])
-            .inspect(|next_shard| next_shard.shard_count.set(shard_count));
-
-        if old_obj_size != obj_size {
-            self.capacity.set(0);
-            self.free.set(None);
-            self.local_free.set(None);
-            self.used.set(0);
-            if old_obj_size != 0 {
-                self.free_is_zero.set(false);
-            }
-            self.extend_inner(obj_size, 0, cap_limit);
-        }
+        self.extend_inner(obj_size, 0, cap_limit);
 
         Ok(next_shard)
     }

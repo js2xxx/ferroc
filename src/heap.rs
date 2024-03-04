@@ -21,12 +21,27 @@ pub use self::thread_local::ThreadLocal;
 use crate::{
     arena::{Arenas, Error, SHARD_SIZE, SLAB_SIZE},
     base::BaseAlloc,
-    slab::{BlockRef, Shard, ShardList, Slab},
+    slab::{Shard, ShardList, Slab, EMPTY_SHARD},
     track, Stat,
 };
 
 /// The count of small & medium object sizes.
 pub const OBJ_SIZE_COUNT: usize = obj_size_index(ObjSizeType::LARGE_MAX) + 1;
+#[cfg(feature = "finer-grained")]
+pub const GRANULARITY_SHIFT: u32 = 3;
+#[cfg(not(feature = "finer-grained"))]
+pub const GRANULARITY_SHIFT: u32 = 4;
+pub const GRANULARITY: usize = 1 << GRANULARITY_SHIFT;
+
+const DIRECT_COUNT: usize = (ObjSizeType::SMALL_MAX >> GRANULARITY_SHIFT) + 1;
+
+const fn direct_index(size: usize) -> usize {
+    (size + GRANULARITY - 1) >> GRANULARITY_SHIFT
+}
+
+// const fn direct_size(direct_index: usize) -> usize {
+//     direct_index << GRANULARITY_SHIFT
+// }
 
 /// Gets the index of a specific object size.
 ///
@@ -83,10 +98,11 @@ pub enum ObjSizeType {
     Large,
     Huge,
 }
+use array_macro::array;
 use ObjSizeType::*;
 
 impl ObjSizeType {
-    pub const SMALL_MAX: usize = 64;
+    pub const SMALL_MAX: usize = 1024;
     pub const MEDIUM_MAX: usize = SHARD_SIZE;
     pub const LARGE_MAX: usize = SLAB_SIZE / 2;
 }
@@ -200,6 +216,12 @@ impl<'arena, B: BaseAlloc> Drop for Context<'arena, B> {
     }
 }
 
+struct Bin<'arena> {
+    list: ShardList<'arena>,
+    obj_size: usize,
+    index: usize,
+}
+
 /// A memory allocator unit of ferroc.
 ///
 /// This type serves as the most direct interface exposed to users compared with
@@ -210,7 +232,8 @@ impl<'arena, B: BaseAlloc> Drop for Context<'arena, B> {
 /// See [the crate-level documentation](crate) for its usage.
 pub struct Heap<'arena: 'cx, 'cx, B: BaseAlloc> {
     cx: Option<&'cx Context<'arena, B>>,
-    shards: [ShardList<'arena>; OBJ_SIZE_COUNT],
+    direct_shards: [Cell<&'arena Shard<'arena>>; DIRECT_COUNT],
+    shards: [Bin<'arena>; OBJ_SIZE_COUNT],
     full_shards: ShardList<'arena>,
     huge_shards: ShardList<'arena>,
 }
@@ -240,7 +263,18 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     pub const fn new_uninit() -> Self {
         Heap {
             cx: None,
-            shards: [ShardList::DEFAULT; OBJ_SIZE_COUNT],
+            direct_shards: array![
+                _ => Cell::new(EMPTY_SHARD.as_ref());
+                DIRECT_COUNT
+            ],
+            shards: array![
+                index => Bin {
+                    list: ShardList::DEFAULT,
+                    obj_size: obj_size(index),
+                    index,
+                };
+                OBJ_SIZE_COUNT
+            ],
             full_shards: ShardList::DEFAULT,
             huge_shards: ShardList::DEFAULT,
         }
@@ -299,7 +333,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let count = (Slab::HEADER_COUNT * SHARD_SIZE + size).div_ceil(SLAB_SIZE);
         let count = NonZeroUsize::new(count).unwrap();
         let shard = cx.alloc_slab(count, SLAB_SIZE, true, stat)?;
-        shard.slab().0.inc_used();
         shard.init_large_or_huge(size, count, cx.arena.base(), stat)?;
         self.huge_shards.push(shard);
 
@@ -327,34 +360,26 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         Ok(ptr)
     }
 
-    fn pop_untracked(
-        &self,
-        size: usize,
-        stat: &mut Stat,
-        set_align: bool,
-    ) -> Result<(NonNull<[u8]>, bool), Error<B>> {
-        let ty @ (Small | Medium | Large) = obj_size_type(size) else {
-            return self.pop_huge_untracked(size, stat, set_align);
-        };
-        let index = obj_size_index(size);
+    fn update_direct(&self, bin: &Bin<'arena>) {
+        if bin.obj_size > ObjSizeType::SMALL_MAX {
+            return;
+        }
+        let shard = bin.list.current().unwrap_or(EMPTY_SHARD.as_ref());
 
-        let (block, is_zeroed) = if let Some(shard) = self.shards[index].current()
-            && let Some(ret) = shard.pop_block()
-        {
-            #[cfg(feature = "stat")]
-            {
-                stat.normal_count[index] += 1;
-                stat.normal_size += obj_size(index);
-            }
-            if set_align {
-                shard.has_aligned.store(true, Relaxed);
-            }
-            ret
+        let direct_index = direct_index(bin.obj_size);
+        if ptr::eq(self.direct_shards[direct_index].get(), shard) {
+            return;
+        }
+        let end = direct_index;
+        let start = if end == 1 {
+            0
         } else {
-            self.pop_contended(index, stat, ty, set_align)?
+            let obj_size = self::obj_size(bin.index - 1);
+            let direct_index = self::direct_index(obj_size);
+            direct_index + 1
         };
-
-        Ok((NonNull::from_raw_parts(block.into_raw(), size), is_zeroed))
+        let range = self.direct_shards[start..=end].iter();
+        range.for_each(|d| d.set(shard));
     }
 
     #[inline]
@@ -364,94 +389,110 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         Ok(ptr)
     }
 
+    fn pop_untracked(
+        &self,
+        size: usize,
+        stat: &mut Stat,
+        set_align: bool,
+    ) -> Result<(NonNull<[u8]>, bool), Error<B>> {
+        if size <= ObjSizeType::SMALL_MAX
+            && let direct_index = direct_index(size)
+            && let shard = unsafe { self.direct_shards.get_unchecked(direct_index) }.get()
+            && let Some((block, is_zeroed)) = shard.pop_block()
+        {
+            #[cfg(feature = "stat")]
+            {
+                stat.direct_count += 1;
+                stat.direct_size += size;
+            }
+            if set_align {
+                shard.has_aligned.store(true, Relaxed);
+            }
+            return Ok((NonNull::from_raw_parts(block.into_raw(), size), is_zeroed));
+        }
+        self.pop_contended(size, stat, set_align)
+    }
+
+    fn pop_from_list_whole(&self, bin: &Bin<'arena>, _stat: &mut Stat) -> Option<&Shard<'arena>> {
+        let mut cursor = bin.list.cursor_head();
+        loop {
+            let shard = cursor.get()?;
+            if !shard.collect(false) {
+                shard.extend(bin.obj_size);
+            }
+
+            if shard.has_free() {
+                return Some(shard);
+            }
+
+            cursor.remove();
+            self.update_direct(bin);
+
+            shard.is_in_full.set(true);
+            self.full_shards.push(shard);
+        }
+    }
+
+    fn pop_from_list(&self, bin: &Bin<'arena>, _stat: &mut Stat) -> Option<&Shard<'arena>> {
+        if let Some(shard) = bin.list.current()
+            && shard.collect(false)
+        {
+            return Some(shard);
+        }
+        self.pop_from_list_whole(bin, _stat)
+    }
+
     #[cold]
     fn pop_contended(
         &self,
-        index: usize,
+        size: usize,
         stat: &mut Stat,
-        ty: ObjSizeType,
         set_align: bool,
-    ) -> Result<(BlockRef<'arena>, bool), Error<B>> {
-        let list = &self.shards[index];
+    ) -> Result<(NonNull<[u8]>, bool), Error<B>> {
+        let is_large = match obj_size_type(size) {
+            Huge => return self.pop_huge_untracked(size, stat, set_align),
+            ty => matches!(ty, Large),
+        };
         let cx = self.cx()?;
+        let bin = &self.shards[obj_size_index(size.max(1))];
 
-        let pop_from_list = |_stat: &mut Stat| {
-            let mut cursor = list.cursor_head();
-            loop {
-                let shard = cursor.get()?;
-                if !shard.collect(false) {
-                    shard.extend();
-                }
+        if !bin.list.is_empty()
+            && let Some(shard) = self.pop_from_list(bin, stat)
+        {
+            debug_assert!(shard.has_free());
+            // SAFETY: `shard` has free blocks.
+            let (block, is_zeroed) = unsafe { shard.pop_block().unwrap_unchecked() };
+            return Ok((NonNull::from_raw_parts(block.into_raw(), size), is_zeroed));
+        }
 
-                match shard.pop_block() {
-                    Some(block) => {
-                        #[cfg(feature = "stat")]
-                        {
-                            _stat.normal_count[index] += 1;
-                            _stat.normal_size += obj_size(index);
-                        }
-                        if set_align {
-                            shard.has_aligned.store(true, Relaxed);
-                        }
-                        break Some(block);
-                    }
-                    None => {
-                        cursor.remove();
-                        shard.is_in_full.set(true);
-                        self.full_shards.push(shard);
-                    }
-                }
-            }
+        let fresh = if !is_large && let Some(free) = cx.free_shards.pop() {
+            // 1. Try to pop from the free shards;
+            free
+        } else {
+            // 2. Try to clear abandoned huge shards and allocate/reclaim a slab.
+            // SAFETY: The current function needs the heap to be initialized.
+            unsafe { self.collect_huge(stat) };
+            cx.alloc_slab(NonZeroUsize::MIN, SLAB_SIZE, is_large, stat)?
         };
 
-        let add_free = |free: &'arena Shard<'arena>, _stat: &mut Stat| {
+        #[cfg(feature = "stat")]
+        {
+            stat.free_shards -= free.shard_count();
+        }
+        if let Some(next) = fresh.init(bin.obj_size, cx.arena.base(), stat)? {
+            cx.free_shards.push(next);
             #[cfg(feature = "stat")]
             {
-                _stat.free_shards -= free.shard_count();
-            }
-            free.slab().0.inc_used();
-            if let Some(next) = free.init(obj_size(index), cx.arena.base(), _stat)? {
-                cx.free_shards.push(next);
-                #[cfg(feature = "stat")]
-                {
-                    _stat.free_shards += next.shard_count();
-                }
-            }
-            list.push(free);
-            Ok(())
-        };
-
-        if !list.is_empty()
-            && let Some(block) = pop_from_list(stat)
-        {
-            return Ok(block);
-        }
-
-        let is_large = matches!(ty, Large);
-        if !is_large && let Some(free) = cx.free_shards.pop() {
-            // 1. Try to pop from the free shards;
-            add_free(free, stat)?;
-        } else {
-            // 2. Try to collect potentially unfull shards.
-            let unfulled = self.full_shards.drain(|shard| shard.collect(false));
-            let mut has_unfulled = false;
-            unfulled.for_each(|shard| {
-                let i = obj_size_index(shard.obj_size.load(Relaxed));
-                shard.is_in_full.set(false);
-                self.shards[i].push(shard);
-                has_unfulled |= i == index;
-            });
-
-            // 3. Try to clear abandoned huge shards and allocate/reclaim a slab.
-            if !has_unfulled {
-                // SAFETY: The current function needs the heap to be initialized.
-                unsafe { self.collect_huge(stat) };
-                let free = cx.alloc_slab(NonZeroUsize::MIN, SLAB_SIZE, is_large, stat)?;
-                add_free(free, stat)?;
+                stat.free_shards += next.shard_count();
             }
         }
+        bin.list.push(fresh);
+        self.update_direct(bin);
 
-        Ok(pop_from_list(stat).unwrap())
+        debug_assert!(fresh.has_free());
+        // SAFETY: `shard` has free blocks.
+        let (block, is_zeroed) = unsafe { fresh.pop_block().unwrap_unchecked() };
+        Ok((NonNull::from_raw_parts(block.into_raw(), size), is_zeroed))
     }
 
     fn pop_aligned(
@@ -460,24 +501,21 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         zero: bool,
         stat: &mut Stat,
     ) -> Result<NonNull<[u8]>, Error<B>> {
-        match obj_size_type(layout.size()) {
-            Small | Medium | Large
-                if let index = obj_size_index(layout.size())
-                    && let Some(shard) = self.shards[index].current()
-                    && let Some((block, is_zeroed)) = shard.pop_block_aligned(layout.align()) =>
+        if layout.size() <= ObjSizeType::SMALL_MAX
+            && let direct_index = direct_index(layout.size())
+            && let shard = unsafe { self.direct_shards.get_unchecked(direct_index) }.get()
+            && let Some((block, is_zeroed)) = shard.pop_block_aligned(layout.align())
+        {
+            #[cfg(feature = "stat")]
             {
-                #[cfg(feature = "stat")]
-                {
-                    stat.normal_count[index] += 1;
-                    stat.normal_size += obj_size(index);
-                }
-                let ptr = NonNull::from_raw_parts(block.into_raw(), layout.size());
-                post_alloc(ptr, is_zeroed, zero);
-                Ok(ptr)
+                stat.direct_count += 1;
+                stat.direct_size += layout.size();
             }
-            Huge if layout.align() <= SHARD_SIZE => self.pop_huge(layout.size(), zero, stat),
-            _ => self.pop_aligned_contended(layout, zero, stat),
+            let ptr = NonNull::from_raw_parts(block.into_raw(), layout.size());
+            post_alloc(ptr, is_zeroed, zero);
+            return Ok(ptr);
         }
+        self.pop_aligned_contended(layout, zero, stat)
     }
 
     #[cold]
@@ -487,7 +525,23 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         zero: bool,
         stat: &mut Stat,
     ) -> Result<NonNull<[u8]>, Error<B>> {
-        if layout.align() <= SHARD_SIZE {
+        if layout.size() <= ObjSizeType::LARGE_MAX
+            && let index = obj_size_index(layout.size())
+            && let Some(shard) = self.shards[index].list.current()
+            && let Some((block, is_zeroed)) = shard.pop_block_aligned(layout.align())
+        {
+            #[cfg(feature = "stat")]
+            {
+                stat.normal_count[index] += 1;
+                stat.normal_size += obj_size(index);
+            }
+            let ptr = NonNull::from_raw_parts(block.into_raw(), layout.size());
+            post_alloc(ptr, is_zeroed, zero);
+            Ok(ptr)
+        } else if layout.align() <= SHARD_SIZE {
+            if layout.size() > ObjSizeType::LARGE_MAX {
+                return self.pop_huge(layout.size(), zero, stat);
+            }
             let (ptr, is_zeroed) =
                 self.pop_untracked(layout.size() + layout.align() - 1, stat, true)?;
             let addr = (ptr.addr().get() + layout.align() - 1) & !(layout.align() - 1);
@@ -518,12 +572,12 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     }
 
     #[cfg(feature = "c")]
-    pub(crate) fn malloc(&self, size: NonZeroUsize, zero: bool) -> Result<NonNull<[u8]>, Error<B>> {
+    pub(crate) fn malloc(&self, size: usize, zero: bool) -> Result<NonNull<[u8]>, Error<B>> {
         #[cfg(feature = "stat")]
         let mut stat = self.cx()?.stat.borrow_mut();
         #[cfg(not(feature = "stat"))]
         let mut stat = ();
-        self.pop(size.get(), zero, &mut stat)
+        self.pop(size, zero, &mut stat)
     }
 
     /// Allocate a memory block of `layout`.
@@ -686,9 +740,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
             if is_unused || was_full {
                 let obj_size = shard.obj_size.load(Relaxed);
-                if let Small | Medium | Large = obj_size_type(obj_size) {
+                if obj_size < ObjSizeType::LARGE_MAX {
                     let index = obj_size_index(obj_size);
-                    let list = &self.shards[index];
+                    let bin = &self.shards[index];
                     #[cfg(feature = "stat")]
                     {
                         stat.normal_count[index] -= 1;
@@ -698,11 +752,13 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                     if was_full {
                         let _ret = self.full_shards.remove(shard);
                         debug_assert!(_ret);
-                        list.push(shard);
+                        bin.list.push(shard);
+                        self.update_direct(bin);
                     }
 
-                    if is_unused && list.len() > 1 {
-                        let _ret = list.remove(shard);
+                    if is_unused && bin.list.len() > 1 {
+                        let _ret = bin.list.remove(shard);
+                        self.update_direct(bin);
                         debug_assert!(_ret);
                         cx.finalize_shard(shard, &mut stat);
                     }
@@ -748,7 +804,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// Those 2 lists will be swapped if the former becomes empty during the
     /// allocation process, which is precisely what this function does.
     pub fn collect(&self, force: bool) {
-        let shards = self.shards.iter().flatten();
+        let shards = self.shards.iter().flat_map(|bin| &bin.list);
         shards.for_each(|shard| {
             shard.collect(force);
         });
@@ -773,7 +829,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Drop for Heap<'arena, 'cx, B> {
             #[cfg(not(feature = "stat"))]
             let mut stat = ();
 
-            let iter = (self.shards.iter()).chain([&self.huge_shards, &self.full_shards]);
+            let iter = (self.shards.iter().map(|bin| &bin.list))
+                .chain([&self.huge_shards, &self.full_shards]);
             iter.flat_map(|l| l.drain(|_| true)).for_each(|shard| {
                 shard.collect(false);
                 shard.is_in_full.set(false);
@@ -800,23 +857,28 @@ unsafe impl<'arena: 'cx, 'cx, B: BaseAlloc> Allocator for Heap<'arena, 'cx, B> {
 
 #[cfg(test)]
 mod tests {
-    use crate::heap::{obj_size, obj_size_index};
+    use crate::heap::{obj_size, obj_size_index, GRANULARITY};
 
     #[test]
     fn test_obj_size() {
-        assert_eq!(obj_size_index(16), 0);
-        assert_eq!(obj_size_index(32), 1);
-        assert_eq!(obj_size_index(48), 2);
-        assert_eq!(obj_size_index(64), 3);
-        assert_eq!(obj_size_index(80), 4);
-        assert_eq!(obj_size_index(96), 5);
-        assert_eq!(obj_size_index(112), 6);
-        assert_eq!(16, obj_size(0));
-        assert_eq!(32, obj_size(1));
-        assert_eq!(48, obj_size(2));
-        assert_eq!(64, obj_size(3));
-        assert_eq!(80, obj_size(4));
-        assert_eq!(96, obj_size(5));
-        assert_eq!(112, obj_size(6));
+        #[cfg(not(feature = "finer-grained"))]
+        const SIZES: &[usize] = &[
+            16, 32, 48, // A
+            64, 80, 96, 112, // B1
+            128, 160, 192, 224, // B2
+            256, 320, 384, 448, // B3
+        ];
+        #[cfg(feature = "finer-grained")]
+        const SIZES: &[usize] = &[
+            8, 16, 24, 32, 40, 48, 56, // A
+            64, 72, 80, 88, 96, 104, 112, 120, // B1
+            128, 144, 160, 176, 192, 208, 224, 240, // B2
+            256, 288, 320, 352, 384, 416, 448, 480, // B3
+        ];
+        for (index, &size) in SIZES.iter().enumerate() {
+            assert_eq!(obj_size_index(size), index);
+            assert_eq!(obj_size_index(size - GRANULARITY + 1), index);
+            assert_eq!(obj_size(index), size);
+        }
     }
 }

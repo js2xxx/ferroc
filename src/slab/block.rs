@@ -1,4 +1,9 @@
-use core::{marker::PhantomData, mem, ptr::NonNull, sync::atomic::AtomicPtr};
+use core::{
+    marker::PhantomData,
+    mem,
+    ptr::{self, NonNull},
+    sync::atomic::AtomicPtr,
+};
 
 use crate::track;
 
@@ -88,6 +93,10 @@ impl<'a> BlockRef<'a> {
 pub(super) struct AtomicBlockRef<'a>(AtomicPtr<()>, PhantomData<&'a ()>);
 
 impl<'a> AtomicBlockRef<'a> {
+    pub(super) const fn new() -> Self {
+        AtomicBlockRef(AtomicPtr::new(ptr::null_mut()), PhantomData)
+    }
+
     pub(super) fn get(&self) -> &AtomicPtr<()> {
         &self.0
     }

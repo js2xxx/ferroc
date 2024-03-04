@@ -13,12 +13,13 @@ macro_rules! thread_statics {
         use super::{Error, Heap, THREAD_LOCALS};
 
         #[thread_local]
-        static HEAP: Cell<Pin<&Heap>> = Cell::new(THREAD_LOCALS.uninit_heap());
+        static HEAP: Cell<Pin<&Heap>> = Cell::new(THREAD_LOCALS.empty_heap());
 
         pub fn with<T: core::fmt::Debug>(f: impl FnOnce(&Heap) -> T) -> T {
             f(&HEAP.get())
         }
 
+        #[inline(always)]
         pub fn with_lazy<T: core::fmt::Debug>(
             mut f: impl FnMut(&Heap) -> Result<T, Error>,
         ) -> Result<T, Error> {
@@ -44,7 +45,7 @@ macro_rules! thread_init_pthread {
         unsafe fn init(id: NonZeroU64) {
             unsafe extern "C" fn fini(id: *mut core::ffi::c_void) {
                 if let Some(id) = NonZeroU64::new(id.addr().try_into().unwrap()) {
-                    HEAP.set(THREAD_LOCALS.uninit_heap());
+                    HEAP.set(THREAD_LOCALS.empty_heap());
                     Pin::static_ref(&THREAD_LOCALS).put(id);
                 }
             }
