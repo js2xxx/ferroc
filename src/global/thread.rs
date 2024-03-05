@@ -15,14 +15,12 @@ macro_rules! thread_statics {
         #[thread_local]
         static HEAP: Cell<Pin<&Heap>> = Cell::new(THREAD_LOCALS.empty_heap());
 
-        pub fn with<T: core::fmt::Debug>(f: impl FnOnce(&Heap) -> T) -> T {
+        pub fn with<T>(f: impl Fn(&Heap) -> T) -> T {
             f(&HEAP.get())
         }
 
         #[inline(always)]
-        pub fn with_lazy<T: core::fmt::Debug>(
-            mut f: impl FnMut(&Heap) -> Result<T, Error>,
-        ) -> Result<T, Error> {
+        pub fn with_lazy<T>(f: impl Fn(&Heap) -> Result<T, Error>) -> Result<T, Error> {
             match f(&HEAP.get()) {
                 Ok(t) => Ok(t),
                 Err(Error::Uninit) => {

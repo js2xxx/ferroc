@@ -63,14 +63,20 @@ impl<const HEADER_CAP: usize> Static<HEADER_CAP> {
 
     fn alloc_inner(&'static self, layout: Layout) -> Option<Chunk<&Self>> {
         let layout = layout.align_to(mem::align_of::<usize>()).ok()?;
-        let (Ok(mut top) | Err(mut top)) =
-            self.top
-                .compare_exchange(ptr::null_mut(), self.memory.get().cast(), AcqRel, Acquire);
+        let base = self.memory.get().cast();
+        let mut top = match self
+            .top
+            .compare_exchange(ptr::null_mut(), base, AcqRel, Acquire)
+        {
+            Ok(_) => base,
+            Err(top) => top,
+        };
         loop {
             let aligned = (top.addr().checked_add(layout.align() - 1))? & !(layout.align() - 1);
-            let end = aligned
-                .checked_add(layout.size())
-                .filter(|&end| end < self.memory.get().addr() + HEADER_CAP)?;
+            let end = aligned.checked_add(layout.size());
+            let end = end.filter(|&end| {
+                end < self.memory.get().addr() + HEADER_CAP * mem::size_of::<usize>()
+            })?;
             let new = NonNull::new(top.with_addr(aligned))?;
             match self
                 .top

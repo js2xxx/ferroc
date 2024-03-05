@@ -111,7 +111,7 @@ impl<B: BaseAlloc> Chunk<B> {
     ///
     /// `ptr` must points to a valid & owned block of memory of `layout`, and
     /// must be allocated from `base`.
-    pub unsafe fn new(ptr: NonNull<u8>, layout: Layout, handle: B::Handle) -> Self {
+    pub const unsafe fn new(ptr: NonNull<u8>, layout: Layout, handle: B::Handle) -> Self {
         Chunk { ptr, layout, handle }
     }
 
@@ -121,7 +121,7 @@ impl<B: BaseAlloc> Chunk<B> {
     ///
     /// `ptr` must points to a valid, owned & static block of memory of
     /// `layout`.
-    pub unsafe fn from_static(ptr: NonNull<u8>, layout: Layout) -> Self
+    pub const unsafe fn from_static(ptr: NonNull<u8>, layout: Layout) -> Self
     where
         B: BaseAlloc<Handle = StaticHandle>,
     {
