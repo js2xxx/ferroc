@@ -9,9 +9,9 @@ use std::{
 
 use ferroc::Ferroc;
 
-#[cfg(not(miri))]
+#[cfg(not(any(miri, feature = "track-valgrind")))]
 const ALL_ROUND: usize = 10000;
-#[cfg(miri)]
+#[cfg(any(miri, feature = "track-valgrind"))]
 const ALL_ROUND: usize = 10;
 const THREAD_COUNT: usize = 6;
 const ROUND: usize = ALL_ROUND / THREAD_COUNT;
@@ -123,7 +123,7 @@ fn bench_one<A: GlobalAlloc>(alloc: &A) -> Duration {
 }
 
 unsafe fn allocate_one<A: GlobalAlloc>(size: usize, a: &A) -> Allocation<A> {
-    let layout = Layout::array::<u8>(size).unwrap();
+    let layout = Layout::from_size_align(size, 32).unwrap();
     let ptr = NonNull::new(a.alloc(layout)).expect("out of memory");
 
     ptr.cast::<u8>().as_ptr().write(0);
