@@ -32,7 +32,7 @@ macro_rules! config_c {
             &self,
             size: usize,
             zero: bool,
-        ) -> Result<core::ptr::NonNull<[u8]>, Error> {
+        ) -> Result<core::ptr::NonNull<()>, Error> {
             thread::with_lazy(|heap, fallback| heap.malloc(size, zero, fallback))
         }
 
@@ -53,6 +53,7 @@ macro_rules! config_c {
 #[macro_export]
 #[doc(hidden)]
 #[allow_internal_unstable(allocator_api)]
+#[allow_internal_unstable(ptr_metadata)]
 #[allow_internal_unstable(strict_provenance)]
 #[allow_internal_unsafe]
 macro_rules! config_inner {
@@ -140,7 +141,7 @@ macro_rules! config_inner {
             /// information.
             #[inline]
             $vis fn allocate(&self, layout: core::alloc::Layout)
-                -> Result<core::ptr::NonNull<[u8]>, Error>
+                -> Result<core::ptr::NonNull<()>, Error>
             {
                 thread::with_lazy(|heap, fallback| heap.allocate_with(layout, fallback))
             }
@@ -158,7 +159,7 @@ macro_rules! config_inner {
             /// information.
             #[inline]
             $vis fn allocate_zeroed(&self, layout: core::alloc::Layout)
-                -> Result<core::ptr::NonNull<[u8]>, Error>
+                -> Result<core::ptr::NonNull<()>, Error>
             {
                 thread::with_lazy(|heap, fallback| heap.allocate_with(layout, fallback))
             }
@@ -203,14 +204,20 @@ macro_rules! config_inner {
             fn allocate(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
-                self.allocate(layout).map_err(|_| core::alloc::AllocError)
+                match self.allocate(layout) {
+                    Ok(t) => Ok(core::ptr::NonNull::from_raw_parts(t, layout.size())),
+                    Err(e) => Err((|_| core::alloc::AllocError)(e)),
+                }
             }
 
             #[inline]
             fn allocate_zeroed(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
-                self.allocate_zeroed(layout).map_err(|_| core::alloc::AllocError)
+                match self.allocate_zeroed(layout) {
+                    Ok(t) => Ok(core::ptr::NonNull::from_raw_parts(t, layout.size())),
+                    Err(e) => Err((|_| core::alloc::AllocError)(e)),
+                }
             }
 
             #[inline]
