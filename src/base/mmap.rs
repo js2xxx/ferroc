@@ -22,7 +22,7 @@ impl Mmap {
 unsafe impl BaseAlloc for Mmap {
     const IS_ZEROED: bool = true;
 
-    type Error = std::io::Error;
+    type Error = std::io::RawOsError;
     type Handle = ManuallyDrop<MmapMut>;
 
     fn allocate(&self, layout: Layout, commit: bool) -> Result<Chunk<Self>, Self::Error> {
@@ -35,7 +35,10 @@ unsafe impl BaseAlloc for Mmap {
         if cfg!(not(miri)) && commit {
             options.populate();
         }
-        let mut trial = options.len(layout.size()).map_anon()?;
+        let mut trial = options
+            .len(layout.size())
+            .map_anon()
+            .map_err(|err| err.raw_os_error().unwrap())?;
         if trial.as_ptr().is_aligned_to(layout.align()) {
             let ptr = NonNull::new(trial.as_mut_ptr()).unwrap();
             // SAFETY: `Chunk` is allocated from self.
@@ -43,7 +46,10 @@ unsafe impl BaseAlloc for Mmap {
         }
 
         drop(trial);
-        let mut a = options.len(layout.size() + layout.align()).map_anon()?;
+        let mut a = options
+            .len(layout.size() + layout.align())
+            .map_anon()
+            .map_err(|err| err.raw_os_error().unwrap())?;
         let ptr = NonNull::new(a.as_mut_ptr().map_addr(|addr| round_up(addr, layout)));
 
         // SAFETY: `Chunk` is allocated from self.
@@ -60,7 +66,7 @@ unsafe impl BaseAlloc for Mmap {
         // SAFETY: The corresponding memory area is going to be used.
         match unsafe { libc::madvise(ptr.as_ptr().cast(), len, libc::MADV_WILLNEED) } {
             0 => Ok(()),
-            _ => Err(std::io::Error::last_os_error()),
+            _ => Err(std::io::Error::last_os_error().raw_os_error().unwrap()),
         }
     }
 

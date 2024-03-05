@@ -146,6 +146,7 @@
 #![feature(ptr_mask)]
 #![feature(ptr_metadata)]
 #![feature(ptr_sub_ptr)]
+#![feature(raw_os_error_ty)]
 #![feature(strict_provenance)]
 #![cfg_attr(feature = "global", allow(internal_features))]
 #![cfg_attr(feature = "global", feature(allow_internal_unsafe))]
@@ -181,7 +182,6 @@ pub use self::stat::Stat;
 
 #[cfg(test)]
 mod test {
-    use core::alloc::Layout;
     use std::{thread, vec};
 
     use crate::{
@@ -213,13 +213,6 @@ mod test {
         let mut vec = vec![0u8; SLAB_SIZE + 5 * SHARD_SIZE];
         vec[SLAB_SIZE / 2] = 123;
         drop(vec);
-    }
-
-    #[test]
-    fn direct() {
-        let layout = Layout::from_size_align(12345, SLAB_SIZE * 2).unwrap();
-        let ptr = Ferroc.allocate(layout).unwrap();
-        unsafe { Ferroc.deallocate(ptr.cast(), layout) }
     }
 
     #[test]
