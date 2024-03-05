@@ -5,8 +5,6 @@
 #[cfg(feature = "global")]
 mod thread_local;
 
-#[cfg(feature = "stat")]
-use core::cell::RefCell;
 use core::{
     alloc::{AllocError, Allocator, Layout},
     cell::Cell,
@@ -22,7 +20,7 @@ use crate::{
     arena::{Arenas, Error, SHARD_SIZE, SLAB_SIZE},
     base::BaseAlloc,
     slab::{BlockRef, Shard, ShardFlags, ShardList, Slab, EMPTY_SHARD},
-    track, Stat,
+    track,
 };
 
 /// The count of small & medium object sizes.
@@ -125,8 +123,6 @@ pub struct Context<'arena, B: BaseAlloc> {
     arena: &'arena Arenas<B>,
     free_shards: ShardList<'arena>,
     heap_count: Cell<usize>,
-    #[cfg(feature = "stat")]
-    stat: RefCell<Stat>,
 }
 
 impl<'arena, B: BaseAlloc> Context<'arena, B> {
@@ -149,8 +145,6 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
             arena,
             free_shards: Default::default(),
             heap_count: Cell::new(0),
-            #[cfg(feature = "stat")]
-            stat: RefCell::new(Stat::INIT),
         }
     }
 
@@ -159,25 +153,16 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
         count: NonZeroUsize,
         align: usize,
         is_large_or_huge: bool,
-        _stat: &mut Stat,
     ) -> Result<&'arena Shard<'arena>, Error<B>> {
         let slab = self
             .arena
             .allocate(self.thread_id, count, align, is_large_or_huge)?;
-        #[cfg(feature = "stat")]
-        {
-            _stat.slabs += 1;
-        }
         Ok(slab.into_shard())
     }
 
-    fn finalize_shard(&self, shard: &'arena Shard<'arena>, stat: &mut Stat) {
-        match shard.fini(stat) {
+    fn finalize_shard(&self, shard: &'arena Shard<'arena>) {
+        match shard.fini() {
             Ok(Some(fini)) => {
-                #[cfg(feature = "stat")]
-                {
-                    stat.free_shards += fini.shard_count();
-                }
                 self.free_shards.push(fini);
             }
             Ok(None) => {} // `slab` has abandoned shard(s), so we cannot reuse it.
@@ -188,15 +173,6 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
                         .free_shards
                         .drain(|s| ptr::eq(s.slab().0, &*slab))
                         .fold(0, |a, s| a + s.shard_count());
-                    #[cfg(feature = "stat")]
-                    {
-                        stat.free_shards -= _count;
-                        if slab.is_abandoned() {
-                            stat.abandoned_slabs += 1;
-                        } else {
-                            stat.slabs -= 1;
-                        }
-                    }
                 }
                 // SAFETY: All slabs are allocated from `self.arena`.
                 unsafe { self.arena.deallocate(slab) }
@@ -209,10 +185,6 @@ impl<'arena, B: BaseAlloc> Drop for Context<'arena, B> {
     fn drop(&mut self) {
         debug_assert!(self.free_shards.is_empty());
         debug_assert_eq!(self.heap_count.get(), 0);
-        #[cfg(all(debug_assertions, feature = "stat"))]
-        self.stat.get_mut().assert_clean();
-        #[cfg(all(test, feature = "stat"))]
-        std::println!("{}: {:?}", self.thread_id, self.stat.get_mut());
     }
 }
 
@@ -340,7 +312,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         size: usize,
         set_align: bool,
         zero: bool,
-        stat: &mut Stat,
         fallback: impl FnOnce() -> &'a Self,
         err_sink: impl FnOnce(Error<B>),
     ) -> Option<NonNull<()>> {
@@ -349,7 +320,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             size: usize,
             set_align: bool,
             zero: bool,
-            stat: &mut Stat,
             sink: impl FnOnce(Error<B>),
         ) -> Option<NonNull<()>> {
             // SAFETY: The heap is initialized.
@@ -357,19 +327,14 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
             let count = (Slab::HEADER_COUNT * SHARD_SIZE + size).div_ceil(SLAB_SIZE);
             let count = NonZeroUsize::new(count).unwrap();
-            let shard = stry!(cx.alloc_slab(count, SHARD_SIZE, true, stat), sink);
+            let shard = stry!(cx.alloc_slab(count, SHARD_SIZE, true,), sink);
             stry!(
-                shard.init_large_or_huge(size, count, cx.arena.base(), stat),
+                shard.init_large_or_huge(size, count, cx.arena.base(),),
                 sink
             );
             heap.huge_shards.push(shard);
 
             let (block, is_zeroed) = shard.pop_block().unwrap();
-            #[cfg(feature = "stat")]
-            {
-                stat.huge_count += 1;
-                stat.huge_size += size;
-            }
             if set_align {
                 shard.flags.set_align();
             }
@@ -379,7 +344,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
         let heap = if !self.is_init() { fallback() } else { self };
         // SAFETY: The heap is initialized.
-        unsafe { pop_huge_inner(heap, size, set_align, zero, stat, err_sink) }
+        unsafe { pop_huge_inner(heap, size, set_align, zero, err_sink) }
     }
 
     fn update_direct(&self, bin: &Bin<'arena>) {
@@ -410,7 +375,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         size: usize,
         set_align: bool,
         zero: bool,
-        stat: &mut Stat,
         fallback: impl FnOnce() -> &'a Self,
         err_sink: impl FnOnce(Error<B>),
     ) -> Option<NonNull<()>> {
@@ -420,21 +384,16 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             && let shard = unsafe { self.direct_shards.get_unchecked(direct_index) }.get()
             && let Some((block, is_zeroed)) = shard.pop_block()
         {
-            #[cfg(feature = "stat")]
-            {
-                stat.direct_count += 1;
-                stat.direct_size += size;
-            }
             if set_align {
                 shard.flags.set_align();
             }
             return Some(post_alloc(block, size, is_zeroed, zero));
         }
         let heap = if self.is_init() { self } else { fallback() };
-        unsafe { heap.pop_contended(size, set_align, zero, stat, err_sink) }
+        unsafe { heap.pop_contended(size, set_align, zero, err_sink) }
     }
 
-    fn find_free_from_all(&self, bin: &Bin<'arena>, _stat: &mut Stat) -> Option<&Shard<'arena>> {
+    fn find_free_from_all(&self, bin: &Bin<'arena>) -> Option<&Shard<'arena>> {
         let mut cursor = bin.list.cursor_head();
         loop {
             let shard = cursor.get()?;
@@ -454,13 +413,13 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
     }
 
-    fn find_free(&self, bin: &Bin<'arena>, _stat: &mut Stat) -> Option<&Shard<'arena>> {
+    fn find_free(&self, bin: &Bin<'arena>) -> Option<&Shard<'arena>> {
         if let Some(shard) = bin.list.current()
             && shard.collect(false)
         {
             return Some(shard);
         }
-        self.find_free_from_all(bin, _stat)
+        self.find_free_from_all(bin)
     }
 
     /// # Safety
@@ -472,11 +431,10 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         size: usize,
         set_align: bool,
         zero: bool,
-        stat: &mut Stat,
         err_sink: impl FnOnce(Error<B>),
     ) -> Option<NonNull<()>> {
         let is_large = match obj_size_type(size) {
-            Huge => return self.pop_huge(size, set_align, zero, stat, || unreachable!(), err_sink),
+            Huge => return self.pop_huge(size, set_align, zero, || unreachable!(), err_sink),
             ty => matches!(ty, Large),
         };
         // SAFETY: `cx` is initialized.
@@ -484,7 +442,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let bin = &self.shards[obj_size_index(size.max(1))];
 
         if !bin.list.is_empty()
-            && let Some(shard) = self.find_free(bin, stat)
+            && let Some(shard) = self.find_free(bin)
         {
             debug_assert!(shard.has_free());
             // SAFETY: `shard` has free blocks.
@@ -498,23 +456,12 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         } else {
             // 2. Try to clear abandoned huge shards and allocate/reclaim a slab.
             // SAFETY: The current function needs the heap to be initialized.
-            unsafe { self.collect_huge(stat) };
-            stry!(
-                cx.alloc_slab(NonZeroUsize::MIN, 1, is_large, stat),
-                err_sink
-            )
+            unsafe { self.collect_huge() };
+            stry!(cx.alloc_slab(NonZeroUsize::MIN, 1, is_large,), err_sink)
         };
 
-        #[cfg(feature = "stat")]
-        {
-            stat.free_shards -= free.shard_count();
-        }
-        if let Some(next) = stry!(fresh.init(bin.obj_size, cx.arena.base(), stat), err_sink) {
+        if let Some(next) = stry!(fresh.init(bin.obj_size, cx.arena.base(),), err_sink) {
             cx.free_shards.push(next);
-            #[cfg(feature = "stat")]
-            {
-                stat.free_shards += next.shard_count();
-            }
         }
         bin.list.push(fresh);
         self.update_direct(bin);
@@ -529,7 +476,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         &'a self,
         layout: Layout,
         zero: bool,
-        stat: &mut Stat,
         fallback: impl FnOnce() -> &'a Self,
         err_sink: impl FnOnce(Error<B>),
     ) -> Option<NonNull<()>> {
@@ -539,14 +485,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             && let shard = unsafe { self.direct_shards.get_unchecked(direct_index) }.get()
             && let Some((block, is_zeroed)) = shard.pop_block_aligned(layout.align())
         {
-            #[cfg(feature = "stat")]
-            {
-                stat.direct_count += 1;
-                stat.direct_size += layout.size();
-            }
             return Some(post_alloc(block, layout.size(), is_zeroed, zero));
         }
-        self.pop_aligned_contended(layout, zero, stat, fallback, err_sink)
+        self.pop_aligned_contended(layout, zero, fallback, err_sink)
     }
 
     #[cold]
@@ -554,7 +495,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         &'a self,
         layout: Layout,
         zero: bool,
-        stat: &mut Stat,
         fallback: impl FnOnce() -> &'a Self,
         err_sink: impl FnOnce(Error<B>),
     ) -> Option<NonNull<()>> {
@@ -563,19 +503,12 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             && let Some(shard) = self.shards[index].list.current()
             && let Some((block, is_zeroed)) = shard.pop_block_aligned(layout.align())
         {
-            #[cfg(feature = "stat")]
-            {
-                stat.normal_count[index] += 1;
-                stat.normal_size += obj_size(index);
-            }
             Some(post_alloc(block, layout.size(), is_zeroed, zero))
         } else if layout.align() <= SHARD_SIZE && layout.size() > ObjSizeType::LARGE_MAX {
-            self.pop_huge(layout.size(), false, zero, stat, fallback, err_sink)
+            self.pop_huge(layout.size(), false, zero, fallback, err_sink)
         } else if layout.align() <= ObjSizeType::LARGE_MAX {
             let oversize = layout.size() + layout.align() - 1;
-            let overptr = self
-                .pop(oversize, true, zero, stat, fallback, err_sink)?
-                .cast();
+            let overptr = self.pop(oversize, true, zero, fallback, err_sink)?.cast();
             let addr = (overptr.addr().get() + layout.align() - 1) & !(layout.align() - 1);
             let ptr = overptr.with_addr(NonZeroUsize::new(addr).unwrap());
             if ptr.addr() != overptr.addr() {
@@ -598,18 +531,18 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         if layout.size() == 0 {
             return Some(layout.dangling().cast());
         }
-        #[cfg(feature = "stat")]
-        let mut stat = self.cx()?.stat.borrow_mut();
-        #[cfg(not(feature = "stat"))]
-        let mut stat = ();
         if layout.size() <= ObjSizeType::MEDIUM_MAX && layout.size() & (layout.align() - 1) == 0 {
-            return (self.pop(layout.size(), false, zero, &mut stat, fallback, err_sink))
+            return (self.pop(layout.size(), false, zero, fallback, err_sink))
                 .inspect(|p| debug_assert!(p.is_aligned_to(layout.align())));
         }
-        self.pop_aligned(layout, zero, &mut stat, fallback, err_sink)
+        self.pop_aligned(layout, zero, fallback, err_sink)
             .inspect(|p| debug_assert!(p.is_aligned_to(layout.align())))
     }
 
+    /// Get the default allocate options of the current heap.
+    ///
+    /// The default heap fallback will panic, while the default error sink will
+    /// silently drop the error.
     #[allow(clippy::type_complexity)]
     pub fn options<'a>() -> AllocateOptions<fn() -> &'a Self, fn(Error<B>)> {
         AllocateOptions {
@@ -618,6 +551,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
     }
 
+    /// Allocate a memory block of `layout` with additional options.
+    ///
+    /// See [`AllocateOptions`] for the meaning of them.
     pub fn allocate_with<'a, F, E>(
         &'a self,
         layout: Layout,
@@ -640,11 +576,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         zero: bool,
         fallback: impl FnOnce() -> &'a Self,
     ) -> Option<NonNull<()>> {
-        #[cfg(feature = "stat")]
-        let mut stat = self.cx()?.stat.borrow_mut();
-        #[cfg(not(feature = "stat"))]
-        let mut stat = ();
-        self.pop(size, false, zero, &mut stat, fallback, |_| {})
+        self.pop(size, false, zero, fallback, |_| {})
     }
 
     /// Allocate a memory block of `layout`.
@@ -681,25 +613,11 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             .ok_or_else(|| unsafe { err.assume_init() })
     }
 
-    /// Retrives the statstics of this heap.
-    ///
-    /// The statistics of all heaps cannot be retrieved directly. Users should
-    /// calculate it from this function.
-    #[cfg(feature = "stat")]
-    pub fn stat(&self) -> Stat {
-        *self.cx.unwrap().stat.borrow()
-    }
-
     /// Retrieves the layout information of a specific allocation.
     ///
     /// The layout returned may not be the same of the layout passed to
     /// [`allocate`](Heap::allocate), but is the most fit layout of it, and can
     /// be passed to [`deallocate`](Heap::deallocate).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Uninit`] is returned if the heap needs to be initialized first
-    /// before retrieving the layout of this allocation.
     ///
     /// # Safety
     ///
@@ -730,14 +648,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// Deallocates an allocation previously allocated by an instance of heap
     /// referring to the same collection of arenas.
     ///
-    /// # Errors
-    ///
-    /// [`Error::Uninit`] is returned if the heap needs to be initialized first
-    /// before deallocating this pointer.
-    ///
-    /// The corresponding implementation in `core::alloc::Allocator` will
-    /// silently leak the allocation instead in this case.
-    ///
     /// # Safety
     ///
     /// - `ptr` must point to an owned, valid memory block of `layout`,
@@ -759,7 +669,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         unsafe { self.free(ptr) }
     }
 
-    unsafe fn free_shard(&self, shard: &'arena Shard<'arena>, obj_size: usize, stat: &mut Stat) {
+    unsafe fn free_shard(&self, shard: &'arena Shard<'arena>, obj_size: usize) {
         debug_assert!(shard.is_unused());
         let cx = self.cx.unwrap_unchecked();
 
@@ -767,28 +677,17 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         if obj_size <= ObjSizeType::LARGE_MAX {
             let index = obj_size_index(obj_size);
             let bin = &self.shards[index];
-            #[cfg(feature = "stat")]
-            {
-                stat.normal_count[index] -= 1;
-                stat.normal_size -= self::obj_size(index);
-            }
 
             if bin.list.len() > 1 {
                 let _ret = bin.list.remove(shard);
                 self.update_direct(bin);
                 debug_assert!(_ret);
-                cx.finalize_shard(shard, stat);
+                cx.finalize_shard(shard);
             }
         } else {
-            #[cfg(feature = "stat")]
-            {
-                stat.huge_count -= 1;
-                stat.huge_size -= obj_size;
-            }
-
             let _ret = self.huge_shards.remove(shard);
             debug_assert!(_ret);
-            cx.finalize_shard(shard, stat);
+            cx.finalize_shard(shard);
         }
     }
 
@@ -825,15 +724,10 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             if ShardFlags::test_zero(ptr::addr_of!((*shard.as_ptr()).flags)) {
                 track::deallocate(ptr, 0);
 
-                #[cfg(feature = "stat")]
-                let mut stat = cx.stat.borrow_mut();
-                #[cfg(not(feature = "stat"))]
-                let mut stat = ();
-
                 let shard = unsafe { shard.as_ref() };
                 let block = unsafe { BlockRef::from_raw(ptr.cast()) };
                 if shard.push_block(block) {
-                    self.free_shard(shard, shard.obj_size.load(Relaxed), &mut stat)
+                    self.free_shard(shard, shard.obj_size.load(Relaxed))
                 }
             } else {
                 self.free_contended(ptr, shard, true)
@@ -854,12 +748,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let block = unsafe { Shard::block_of(shard, ptr.cast()) };
         track::deallocate(NonNull::new_unchecked(block.as_ptr().cast()), 0);
         if is_local {
-            // `thread_id` matches; We're deallocating from the same thread.
-            #[cfg(feature = "stat")]
-            let mut stat = cx.stat.borrow_mut();
-            #[cfg(not(feature = "stat"))]
-            let mut stat = ();
-
             let shard = unsafe { shard.as_ref() };
 
             let was_full = shard.flags.is_in_full();
@@ -880,7 +768,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 }
 
                 if is_unused {
-                    self.free_shard(shard, obj_size, &mut stat)
+                    self.free_shard(shard, obj_size)
                 }
             }
         } else {
@@ -892,14 +780,14 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// # Safety
     ///
     /// The heap must be initialized.
-    unsafe fn collect_huge(&self, stat: &mut Stat) {
+    unsafe fn collect_huge(&self) {
         let huge = self.huge_shards.drain(|shard| {
             shard.collect(false);
             shard.is_unused()
         });
         huge.for_each(|shard| {
             let cx = unsafe { self.cx.unwrap_unchecked() };
-            cx.finalize_shard(shard, stat)
+            cx.finalize_shard(shard)
         });
     }
 
@@ -917,14 +805,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             shard.collect(force);
         });
 
-        #[cfg(feature = "stat")]
-        let mut stat = self.cx.unwrap().stat.borrow_mut();
-        #[cfg(not(feature = "stat"))]
-        let mut stat = ();
-
         if self.is_init() {
             // SAFETY: `self` is initialized.
-            unsafe { self.collect_huge(&mut stat) };
+            unsafe { self.collect_huge() };
         }
     }
 }
@@ -932,17 +815,12 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 impl<'arena: 'cx, 'cx, B: BaseAlloc> Drop for Heap<'arena, 'cx, B> {
     fn drop(&mut self) {
         if let Some(cx) = self.cx.take() {
-            #[cfg(feature = "stat")]
-            let mut stat = cx.stat.borrow_mut();
-            #[cfg(not(feature = "stat"))]
-            let mut stat = ();
-
             let iter = (self.shards.iter().map(|bin| &bin.list))
                 .chain([&self.huge_shards, &self.full_shards]);
             iter.flat_map(|l| l.drain(|_| true)).for_each(|shard| {
                 shard.collect(false);
                 shard.flags.reset();
-                cx.finalize_shard(shard, &mut stat);
+                cx.finalize_shard(shard);
             });
             cx.heap_count.set(cx.heap_count.get() - 1);
         }
@@ -969,17 +847,24 @@ unsafe impl<'arena: 'cx, 'cx, B: BaseAlloc> Allocator for Heap<'arena, 'cx, B> {
     }
 }
 
+/// The additional allocate options which can be passed into
+/// [`allocate_with`](Heap::allocate_with).
 #[derive(Clone, Copy)]
 pub struct AllocateOptions<F, E> {
-    fallback: F,
-    error_sink: E,
+    /// The lazyily evaluated backup heap when the current heap is not
+    /// initialized (fails to acquire memory from its context).
+    pub fallback: F,
+    /// Receives a concrete error when the allocation fails.
+    pub error_sink: E,
 }
 
 impl<F, E> AllocateOptions<F, E> {
+    /// Creates a new allocate options.
     pub const fn new(fallback: F, error_sink: E) -> Self {
         AllocateOptions { fallback, error_sink }
     }
 
+    /// Replace with a new fallback.
     pub fn fallback<F2>(self, fallback: F2) -> AllocateOptions<F2, E> {
         AllocateOptions {
             fallback,
@@ -987,6 +872,7 @@ impl<F, E> AllocateOptions<F, E> {
         }
     }
 
+    /// Replace with a new error sink.
     pub fn error_sink<E2>(self, error_sink: E2) -> AllocateOptions<F, E2> {
         AllocateOptions {
             fallback: self.fallback,

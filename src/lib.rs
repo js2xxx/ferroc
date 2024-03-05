@@ -113,7 +113,7 @@
 //! // Manually allocate memory.
 //! let layout = std::alloc::Layout::new::<u8>();
 //! let ptr = heap.allocate(layout).unwrap();
-//! unsafe { heap.deallocate(ptr.cast(), layout) }.unwrap();
+//! unsafe { heap.deallocate(ptr.cast(), layout) };
 //!
 //! // Immediately run some delayed clean-up operations.
 //! heap.collect(/* force */false);
@@ -126,12 +126,6 @@
 //!
 //! If you want to replace the default `malloc` implementation, add a `rustc`
 //! flag `--cfg sys_alloc` when compiling.
-//!
-//! ## Statistics
-//!
-//! You can get statistics by enabling the `stat` feature and call the `stat`
-//! method on the default allocator or other instances like
-//! [`Heap`](crate::heap::Heap).
 #![no_std]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
@@ -164,21 +158,14 @@ mod c;
 pub mod global;
 pub mod heap;
 mod slab;
-#[cfg(feature = "stat")]
-mod stat;
 #[doc(hidden)]
 pub mod track;
-
-#[cfg(not(feature = "stat"))]
-type Stat = ();
 
 #[cfg(feature = "default")]
 config_mod!(global_mmap: pub crate::base::Mmap: pthread);
 
 #[cfg(feature = "default")]
 pub use self::global_mmap::*;
-#[cfg(feature = "stat")]
-pub use self::stat::Stat;
 
 #[cfg(test)]
 mod test {

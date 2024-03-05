@@ -71,7 +71,6 @@ fn main() {
 ## Cargo Features
 
 - Basic features: generic `Arenas`, `Context`s and `Heap`s;
-- `"stat"`: Statistics counters support;
 - `"base-static"`: Base allocator `Static`;
 - `"base-mmap"`: Base allocator `Mmap` based on os-specific virtual memory managers (`std` and `libc` required);
 - `"global"`: Global allocator instantiation macros `config!` and `config_mod!` (inner thread local statics are leaked by default);

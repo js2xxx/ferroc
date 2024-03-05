@@ -1,27 +1,6 @@
 #[doc(hidden)]
 pub mod thread;
 
-#[cfg(feature = "stat")]
-#[macro_export]
-#[doc(hidden)]
-macro_rules! config_stat {
-    ($vis:vis) => {
-        /// Retrieves the statistics of this allocator.
-        ///
-        /// This function forwards the call to [`Heap::stat`].
-        $vis fn stat(&self) -> $crate::stat::Stat {
-            thread::with(|heap| heap.stat())
-        }
-    };
-}
-
-#[cfg(not(feature = "stat"))]
-#[macro_export]
-#[doc(hidden)]
-macro_rules! config_stat {
-    ($vis:vis) => {};
-}
-
 #[cfg(feature = "c")]
 #[macro_export]
 #[doc(hidden)]
@@ -122,8 +101,6 @@ macro_rules! config_inner {
             $vis fn collect(&self, force: bool) {
                 thread::with(|heap| heap.collect(force));
             }
-
-            $crate::config_stat!($vis);
 
             /// Allocate a memory block of `layout` from the current heap.
             ///
