@@ -1,13 +1,14 @@
 // #[cfg(feature = "c")]
 // use core::num::NonZeroUsize;
 use core::{
-    alloc::Layout,
+    alloc::{AllocError, Allocator, Layout},
     cell::UnsafeCell,
     marker::PhantomPinned,
     mem::{ManuallyDrop, MaybeUninit},
     num::NonZeroU64,
+    ops::Deref,
     pin::Pin,
-    ptr,
+    ptr::{self, NonNull},
     sync::atomic::{AtomicPtr, AtomicU64, Ordering::*},
 };
 
@@ -47,15 +48,17 @@ impl BucketIndex {
 }
 
 #[repr(align(128))]
-struct ThreadData<'arena, B: BaseAlloc> {
+struct Entry<'arena, B: BaseAlloc> {
     cx: ManuallyDrop<Context<'arena, B>>,
     heap: ManuallyDrop<Heap<'arena, 'arena, B>>,
     next_reclaimed_id: AtomicU64,
     _marker: PhantomPinned,
 }
 
-impl<'arena, B: BaseAlloc> Drop for ThreadData<'arena, B> {
+impl<'arena, B: BaseAlloc> Drop for Entry<'arena, B> {
     fn drop(&mut self) {
+        // SAFETY: The drop order should be explicitly specified: The heap should be
+        // dropped before the context.
         unsafe {
             ManuallyDrop::drop(&mut self.heap);
             ManuallyDrop::drop(&mut self.cx);
@@ -65,7 +68,7 @@ impl<'arena, B: BaseAlloc> Drop for ThreadData<'arena, B> {
 
 struct Bucket<'arena, B: BaseAlloc> {
     chunk: UnsafeCell<MaybeUninit<Chunk<B>>>,
-    pointer: AtomicPtr<ThreadData<'arena, B>>,
+    pointer: AtomicPtr<Entry<'arena, B>>,
 }
 
 impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
@@ -79,18 +82,20 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
     const NEW: Self = Bucket::new();
 
     fn allocate(bi: BucketIndex, arenas: &'arena Arenas<B>) -> Chunk<B> {
-        let layout = Layout::new::<ThreadData<'arena, B>>();
+        let layout = Layout::new::<Entry<'arena, B>>();
         let (layout, _) = layout
             .repeat(bi.bucket_count)
             .expect("layout calculation failed: too many bucket requests");
         let Ok(chunk) = arenas.base().allocate(layout, true) else {
             unreachable!("allocation for thread-local failed: too many bucket requests")
         };
-        let mut bucket = chunk.pointer().cast::<ThreadData<'arena, B>>();
+        let mut bucket = chunk.pointer().cast::<Entry<'arena, B>>();
         for id in bi.id_in_bucket() {
+            // SAFETY: All `bucket`s are within the range of the previously allocated chunk,
+            // for its layout is calculated before.
             unsafe {
                 let td = bucket.as_uninit_mut();
-                let td = td.write(ThreadData {
+                let td = td.write(Entry {
                     cx: ManuallyDrop::new(Context::new_with_id(arenas, id)),
                     heap: ManuallyDrop::new(Heap::new_uninit()),
                     next_reclaimed_id: AtomicU64::new(0),
@@ -103,6 +108,11 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
         chunk
     }
 
+    /// # Safety
+    ///
+    /// This function is mocking the signature and purpose of `Drop::drop`, but
+    /// it needs `bucket_index` for its metadata. Thus, `bucket_index` must
+    /// corresponds to the position of the bucket.
     unsafe fn drop(this: &mut Self, bucket_index: usize) -> bool {
         let mut bucket = *this.pointer.get_mut();
         if !bucket.is_null() {
@@ -122,6 +132,9 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
 ///
 /// This structure serves as a substitute for builtin dynamic TLS support with
 /// `__tls_get_addr`, which uses its slow `dlmalloc` to allocate TLS variables.
+///
+/// Most of the direct utilities from this structure is `unsafe`. For usages
+/// that are totally safe, see the examples in [`ThreadData`].
 pub struct ThreadLocal<'arena, B: BaseAlloc> {
     arena: &'arena Arenas<B>,
 
@@ -134,6 +147,13 @@ pub struct ThreadLocal<'arena, B: BaseAlloc> {
     _marker: PhantomPinned,
 }
 
+// SAFETY:
+// - For buckets, we only expose thread data entries to its corresponding
+//   thread, so there's no data race;
+// - For IDs, we use atomics to assign and recycle the thread ids, se there's no
+//   data race either;
+// - For the empty heap, this structure is immutable since empty heaps cannot
+//   allocate anything, and thus cannot deallocate anything either.
 unsafe impl<'arena, B: BaseAlloc + Sync> Sync for ThreadLocal<'arena, B> {}
 
 impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
@@ -152,8 +172,8 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     /// The default uninitialized heap, serving as a const initialization
     /// thread-local heap references.
     ///
-    /// This method is safe because uninitialized heap doesn't mutate its inner
-    /// data at all, thus ideomatically `Sync`.
+    /// This method is safe because uninitialized heaps don't mutate their inner
+    /// data at all, thus practically `Sync`.
     pub const fn empty_heap(&'static self) -> Pin<&'static Heap<'static, 'static, B>> {
         Pin::static_ref(&self.empty_heap)
     }
@@ -166,27 +186,54 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     ///
     /// `id` must be unique with each live thread regarding only this structure
     /// and may or may not be recycled.
-    #[inline(always)]
     pub unsafe fn get(self: Pin<&Self>, id: NonZeroU64) -> Pin<&Heap<'arena, '_, B>> {
         let bi = BucketIndex::from_id(id);
         self.map_unchecked(|this| {
-            if let Some(heap) = this.get_inner(bi) {
-                return heap;
-            }
-            this.insert(bi)
+            // SAFETY: the thread data entry is initialized in `self.assign`.
+            this.get_inner(bi).unwrap_unchecked()
         })
     }
 
     /// Acquires a new thread id and initialize its associated heap.
     ///
+    /// # Examples
+    ///
+    /// Users can Store the information in its thread-local variable in 2 ways:
+    ///
+    /// 1. Store the thread ID only, and get access to the heap every time using
+    ///   `self.get`;
+    /// 2. Store both the thread ID and the pinned heap.
+    ///
+    /// Both 2 ways needs to run its corresponding destructor manually. If RAII
+    /// is preferred, [`ThreadData`] can be used instead.
+    ///
     /// # Panics
     ///
     /// Panics if the acquisition failed.
     pub fn assign(self: Pin<&Self>) -> (Pin<&Heap<'arena, '_, B>>, NonZeroU64) {
+        // SAFETY: `id` is used to initialize its thread data entry below immediately.
         let id = unsafe { self.acquire_id() };
-        (unsafe { self.get(id) }, id)
+        let bi = BucketIndex::from_id(id);
+        // SAFETY: `id` is freshly allocated, which belongs to no other thread.
+        //
+        // Note that while `id` is freshly allocated, it may be reclaimed from another
+        // dead thread, which means its thread data entry can be already initialized and
+        // should not be `insert`ed unconditionally.
+        let heap = unsafe {
+            self.map_unchecked(|this| {
+                if let Some(heap) = this.get_inner(bi) {
+                    return heap;
+                }
+                this.insert(bi)
+            })
+        };
+        (heap, id)
     }
 
+    /// # Safety
+    ///
+    /// The corresponding thread data entry to the returned ID must be
+    /// initialized after acquisition.
     unsafe fn acquire_id(self: Pin<&Self>) -> NonZeroU64 {
         let mut id = self.next_reclaimed_id.load(Relaxed);
         loop {
@@ -195,15 +242,18 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
                 const SATURATED_ID: u64 = (MAX_ID & u64::MAX) + ((MAX_ID ^ u64::MAX) >> 1);
 
                 break match self.next_id.fetch_add(1, Relaxed) {
-                    SATURATED_ID.. => {
+                    MAX_ID.. => {
                         self.next_id.store(SATURATED_ID, Relaxed);
                         panic!("Thread ID overflow");
                     }
+                    // SAFETY: `next_id` is less than `MAX_ID` and greater than 0.
                     next_id => unsafe { NonZeroU64::new_unchecked(next_id) },
                 };
             };
             let bi = BucketIndex::from_id(ret);
-            let td = self.thread_data(bi).unwrap_unchecked();
+            // SAFETY: Every reclaimed id corresponds to a previously owner thread alongside
+            // with its valid thread data entry.
+            let td = unsafe { self.entry(bi).unwrap_unchecked() };
             let next = td.next_reclaimed_id.load(Relaxed);
 
             match self
@@ -223,15 +273,17 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     ///
     /// # Safety
     ///
-    /// - `id` must corresponds to a initialized thread data which the current
-    ///   thread is using.
+    /// - `id` must be previously [assign]ed.
     /// - The current thread must not use this id to access its thread-local
     ///   heap.
+    ///
+    /// [assign]: ThreadLocal::assign
     pub unsafe fn put(self: Pin<&Self>, id: NonZeroU64) {
         let mut old = self.next_reclaimed_id.load(Relaxed);
         loop {
             let bi = BucketIndex::from_id(id);
-            let td = self.thread_data(bi).unwrap_unchecked();
+            // SAFETY: The corresponding data is initialized.
+            let td = unsafe { self.entry(bi).unwrap_unchecked() };
             td.next_reclaimed_id.store(old, Relaxed);
             match self
                 .next_reclaimed_id
@@ -251,7 +303,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     }
 
     #[inline]
-    unsafe fn thread_data(&self, bi: BucketIndex) -> Option<&ThreadData<'arena, B>> {
+    unsafe fn entry(&self, bi: BucketIndex) -> Option<&Entry<'arena, B>> {
         let bucket = self.bucket_slot(bi).pointer.load(Acquire);
         if bucket.is_null() {
             return None;
@@ -261,7 +313,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
 
     #[inline]
     unsafe fn get_inner(&self, bi: BucketIndex) -> Option<&Heap<'arena, 'arena, B>> {
-        Some(&self.thread_data(bi)?.heap)
+        Some(&self.entry(bi)?.heap)
     }
 
     #[cold]
@@ -295,10 +347,116 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
 impl<'arena, B: BaseAlloc> Drop for ThreadLocal<'arena, B> {
     fn drop(&mut self) {
         for (index, bucket_slot) in self.buckets.iter_mut().enumerate() {
+            // SAFETY: `drop` only during drops. Following the normal drop order.
             if !unsafe { Bucket::drop(bucket_slot, index) } {
                 break;
             }
         }
+    }
+}
+
+/// A thread-local heap allocated from [`ThreadLocal`].
+///
+/// This structure is practically equivalent to [`Heap`], except being
+/// allocated from a dedicated collection of thread-locals to avoid invocation
+/// of built-in TLS allocation functions like `__tls_get_addr`.
+///
+/// # Examples
+///
+/// Creating thread data on the stack:
+///
+/// ```
+/// #![feature(allocator_api)]
+///
+/// use core::pin::pin;
+/// use ferroc::{
+///     arena::Arenas,
+///     base::Mmap,
+///     heap::{ThreadLocal, ThreadData}
+/// };
+///
+/// let arenas = Arenas::new(Mmap);
+/// let thread_local = pin!(ThreadLocal::new(&arenas));
+/// let thread_data = ThreadData::new(thread_local.as_ref());
+///
+/// let mut vec = Vec::with_capacity_in(5, &thread_data);
+/// vec.extend([1, 2, 3, 4, 5]);
+/// assert_eq!(vec.iter().sum::<i32>(), 15);
+/// ```
+///
+/// Creating on the real thread-local storage:
+///
+/// ```
+/// # #![feature(allocator_api)]
+///
+/// # use core::pin::Pin;
+/// # use ferroc::{
+/// #     arena::Arenas,
+/// #     base::Mmap,
+/// #     heap::{ThreadLocal, ThreadData}
+/// # };
+///
+/// static ARENAS: Arenas<Mmap> = Arenas::new(Mmap);
+/// static THREAD_LOCAL: ThreadLocal<Mmap> = ThreadLocal::new(&ARENAS);
+///
+/// thread_local! {
+///     static THREAD_DATA: ThreadData<'static, 'static, Mmap>
+///         = ThreadData::new(Pin::static_ref(&THREAD_LOCAL));
+/// }
+///
+/// THREAD_DATA.with(|td| {
+///     let mut vec = Vec::with_capacity_in(5, td);
+///     vec.extend([1, 2, 3, 4, 5]);
+///     assert_eq!(vec.iter().sum::<i32>(), 15);
+/// })
+/// ```
+///
+/// While this structure is not `Send` or `Sync`, users can wrap it with a unit
+/// struct and forward the (de)allocation functions to `THREAD_DATA.with(|td| /*
+/// ... */)`, thus creating a `Send` & `Sync` Allocator.
+///
+/// **HOWEVER**, Since the [`thread_local!`](std::thread_local) macro in the
+/// standard library uses allocation internally, marking the wrapped allocator
+/// above as the global allocator will result in infinite recursion. If a global
+/// allocator is desired, consider using this crate's [`config`](crate::config)
+/// macros instead.
+pub struct ThreadData<'t, 'arena: 't, B: BaseAlloc> {
+    thread_local: Pin<&'t ThreadLocal<'arena, B>>,
+    heap: Pin<&'t Heap<'arena, 't, B>>,
+    id: NonZeroU64,
+}
+
+impl<'t, 'arena: 't, B: BaseAlloc> ThreadData<'t, 'arena, B> {
+    /// Creates a new thread-local heap.
+    pub fn new(thread_local: Pin<&'t ThreadLocal<'arena, B>>) -> Self {
+        let (heap, id) = thread_local.assign();
+        ThreadData { thread_local, heap, id }
+    }
+}
+
+impl<'t, 'arena: 't, B: BaseAlloc> Deref for ThreadData<'t, 'arena, B> {
+    type Target = Heap<'arena, 't, B>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.heap
+    }
+}
+
+unsafe impl<'t, 'arena: 't, B: BaseAlloc> Allocator for ThreadData<'t, 'arena, B> {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        Allocator::allocate(&**self, layout)
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        Allocator::deallocate(&**self, ptr, layout)
+    }
+}
+
+impl<'t, 'arena: 't, B: BaseAlloc> Drop for ThreadData<'t, 'arena, B> {
+    fn drop(&mut self) {
+        // SAFETY: `id` is previously allocated from `thread_local`, and `heap` is not
+        // used any longer.
+        unsafe { self.thread_local.put(self.id) }
     }
 }
 

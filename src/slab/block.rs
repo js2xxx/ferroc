@@ -87,6 +87,13 @@ impl<'a> BlockRef<'a> {
     }
 }
 
+impl Drop for BlockRef<'_> {
+    fn drop(&mut self) {
+        // We only create a blank implementation to mock its unique ownership,
+        // and to prevent clippy from shouting `forget_non_drop`.
+    }
+}
+
 /// An atomic slot containing an `Option<Block<'a>>`.
 #[derive(Default)]
 #[repr(transparent)]

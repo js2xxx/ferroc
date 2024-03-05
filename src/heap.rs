@@ -17,7 +17,7 @@ use core::{
 };
 
 #[cfg(feature = "global")]
-pub use self::thread_local::ThreadLocal;
+pub use self::thread_local::{ThreadData, ThreadLocal};
 use crate::{
     arena::{Arenas, Error, SHARD_SIZE, SLAB_SIZE},
     base::BaseAlloc,
@@ -397,6 +397,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     ) -> Result<(NonNull<[u8]>, bool), Error<B>> {
         if size <= ObjSizeType::SMALL_MAX
             && let direct_index = direct_index(size)
+            // SAFETY: `direct_shards` only contains sizes that <= `SMALL_MAX`.
             && let shard = unsafe { self.direct_shards.get_unchecked(direct_index) }.get()
             && let Some((block, is_zeroed)) = shard.pop_block()
         {
@@ -413,7 +414,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         self.pop_contended(size, stat, set_align)
     }
 
-    fn pop_from_list_whole(&self, bin: &Bin<'arena>, _stat: &mut Stat) -> Option<&Shard<'arena>> {
+    fn find_free_from_all(&self, bin: &Bin<'arena>, _stat: &mut Stat) -> Option<&Shard<'arena>> {
         let mut cursor = bin.list.cursor_head();
         loop {
             let shard = cursor.get()?;
@@ -433,13 +434,13 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
     }
 
-    fn pop_from_list(&self, bin: &Bin<'arena>, _stat: &mut Stat) -> Option<&Shard<'arena>> {
+    fn find_free(&self, bin: &Bin<'arena>, _stat: &mut Stat) -> Option<&Shard<'arena>> {
         if let Some(shard) = bin.list.current()
             && shard.collect(false)
         {
             return Some(shard);
         }
-        self.pop_from_list_whole(bin, _stat)
+        self.find_free_from_all(bin, _stat)
     }
 
     #[cold]
@@ -457,7 +458,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let bin = &self.shards[obj_size_index(size.max(1))];
 
         if !bin.list.is_empty()
-            && let Some(shard) = self.pop_from_list(bin, stat)
+            && let Some(shard) = self.find_free(bin, stat)
         {
             debug_assert!(shard.has_free());
             // SAFETY: `shard` has free blocks.
@@ -503,6 +504,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     ) -> Result<NonNull<[u8]>, Error<B>> {
         if layout.size() <= ObjSizeType::SMALL_MAX
             && let direct_index = direct_index(layout.size())
+            // SAFETY: `direct_shards` only contains sizes that <= `SMALL_MAX`.
             && let shard = unsafe { self.direct_shards.get_unchecked(direct_index) }.get()
             && let Some((block, is_zeroed)) = shard.pop_block_aligned(layout.align())
         {

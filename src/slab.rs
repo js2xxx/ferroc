@@ -357,6 +357,7 @@ impl<'a> Shard<'a> {
     }
 
     pub(crate) fn has_free(&self) -> bool {
+        // SAFETY: We read the tag without moving out the inner `BlockRef`.
         unsafe { (*self.free.as_ptr()).is_some() }
     }
 
@@ -365,20 +366,35 @@ impl<'a> Shard<'a> {
     }
 
     pub(crate) fn pop_block(&self) -> Option<(BlockRef<'a>, bool)> {
+        // `Cell::take` should not be used due to its unconditional write to the storage
+        // place with `None`, which causes an undefined behavior of racy read-write on
+        // `EMPTY_SHARD`.
+        //
+        // SAFETY: reading `None` means nothing to drop, and we cansafely branch out...
         let mut block = unsafe { ptr::read(self.free.as_ptr()) }?;
+        // SAFETY: ... while reading `Some` means we have pracically moved out the
+        // ownership of this block, so we overwrite the slot with `block.take_next()`.
         unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
         self.used.set(self.used.get() + 1);
         Some((block, self.free_is_zero.get()))
     }
 
-    #[allow(clippy::forget_non_drop)]
     pub(crate) fn pop_block_aligned(&self, align: usize) -> Option<(BlockRef<'a>, bool)> {
+        // `Cell::take` should not be used due to its unconditional write to the storage
+        // place with `None`, which causes an undefined behavior of racy read-write on
+        // `EMPTY_SHARD`.
+        //
+        // SAFETY: reading `None` means nothing to drop, and we cansafely branch out...
         let mut block = unsafe { ptr::read(self.free.as_ptr()) }?;
         if block.as_ptr().is_aligned_to(align) {
+            // SAFETY: ... while reading `Some` and successfully veritying the block means
+            // we have pracically moved out the ownership of it, so we overwrite the slot
+            // with `block.take_next()`...
             unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
             self.used.set(self.used.get() + 1);
             Some((block, self.free_is_zero.get()))
         } else {
+            // ... and an unverified block should not be moved out, so we simply forget it.
             mem::forget(block);
             None
         }
@@ -429,6 +445,7 @@ impl<'a> Shard<'a> {
                     AcqRel,
                     Acquire,
                 ) {
+                    // SAFETY: Every pointer residing in `thread_free` points to a valid block.
                     Ok(_) => break unsafe { BlockRef::from_raw(nn) },
                     Err(e) => ptr = e,
                 },
@@ -440,7 +457,6 @@ impl<'a> Shard<'a> {
         self.used.set(self.used.get() - count);
     }
 
-    #[allow(clippy::forget_non_drop)]
     pub(crate) fn collect(&self, force: bool) -> bool {
         if force || !self.thread_free.get().load(Relaxed).is_null() {
             self.collect_thread_free();
@@ -449,6 +465,8 @@ impl<'a> Shard<'a> {
         let local_free = self.local_free.as_ptr();
         let free = self.free.as_ptr();
 
+        // SAFETY: We do the same trick in `self.pop_block` to prevent unconditional
+        // writes.
         unsafe {
             match (ptr::read(local_free), ptr::read(free)) {
                 (Some(lfree), None) => {
@@ -557,6 +575,7 @@ impl<'a> Shard<'a> {
 
         if !self.is_committed.replace(true) {
             let area = self.header.shard_area;
+            // SAFETU: `area` is within the range of allocated slabs.
             unsafe { base.commit(NonNull::from_raw_parts(area.cast(), usable_size)) }
                 .map_err(Error::Commit)?;
         }
@@ -607,6 +626,7 @@ impl<'a> Shard<'a> {
 
         if !self.is_committed.replace(true) {
             let area = self.header.shard_area;
+            // SAFETU: `area` is within the range of allocated slabs.
             unsafe { base.commit(NonNull::from_raw_parts(area.cast(), SHARD_SIZE)) }
                 .map_err(Error::Commit)?;
         }
