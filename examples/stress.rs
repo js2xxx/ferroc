@@ -1,3 +1,4 @@
+//! Ported from `mstress`.
 #![feature(allocator_api)]
 
 use std::{
