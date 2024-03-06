@@ -221,7 +221,7 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
 /// additional provenance information.
 struct ShardHeader<'a> {
     #[cfg(miri)]
-    slab: NonNull<Slab<'a>>,
+    slab: NonNull<()>,
     shard_area: NonNull<u8>,
     marker: PhantomData<&'a ()>,
 }
@@ -362,7 +362,7 @@ impl<'a> Shard<'a> {
         Shard {
             header: ShardHeader {
                 #[cfg(miri)]
-                slab,
+                slab: slab.cast(),
                 shard_area: Slab::shard_area(slab, index),
                 marker: PhantomData,
             },
@@ -533,7 +533,7 @@ impl<'a> Shard<'a> {
         let slab = unsafe {
             let header_slab = self.header.slab.cast();
             assert_eq!(slab, header_slab);
-            header_slab.cast().as_ref()
+            header_slab.as_ref()
         };
         // SAFETY: `self` must reside in the `shards` array in its `Slab`.
         let index = unsafe { (self as *const Self).sub_ptr(slab.shards.as_ptr()) };
