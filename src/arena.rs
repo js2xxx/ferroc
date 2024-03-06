@@ -391,6 +391,16 @@ impl<B: BaseAlloc> Arenas<B> {
         Some(ret)
     }
 
+    pub(crate) fn reclaim_all(&self) {
+        while let Some(slab) = self.pop_abandoned() {
+            if slab.collect_abandoned() {
+                unsafe { self.deallocate(slab) };
+            } else {
+                self.push_abandoned_visited(slab);
+            }
+        }
+    }
+
     fn try_reclaim(
         &self,
         thread_id: u64,
