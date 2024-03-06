@@ -13,6 +13,7 @@ use core::{alloc::Layout, ptr::NonNull};
 pub use self::mmap::Mmap;
 #[cfg(feature = "base-static")]
 pub use self::static_::Static;
+use crate::arena::SLAB_SIZE;
 
 /// A static memory handle, unable to be deallocated any longer.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -107,11 +108,20 @@ impl<B: BaseAlloc> Chunk<B> {
     /// Creates a memory chunk manually. This function should only be used by an
     /// implementation of a base allocator.
     ///
+    /// # Panics
+    ///
+    /// This function panics if the alignment of the layout is less then
+    /// [`SLAB_SIZE`].
+    ///
     /// # Safety
     ///
     /// `ptr` must points to a valid & owned block of memory of `layout`, and
     /// must be allocated from `base`.
     pub const unsafe fn new(ptr: NonNull<u8>, layout: Layout, handle: B::Handle) -> Self {
+        assert!(
+            layout.align() <= SLAB_SIZE,
+            "the alignment must be greater than ferroc::arena::SLAB_SIZE",
+        );
         Chunk { ptr, layout, handle }
     }
 

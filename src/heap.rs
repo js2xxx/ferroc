@@ -14,6 +14,8 @@ use core::{
     sync::atomic::{AtomicU64, Ordering::*},
 };
 
+use array_macro::array;
+
 #[cfg(feature = "global")]
 pub use self::thread_local::{ThreadData, ThreadLocal};
 use crate::{
@@ -25,10 +27,13 @@ use crate::{
 
 /// The count of small & medium object sizes.
 pub const OBJ_SIZE_COUNT: usize = obj_size_index(ObjSizeType::LARGE_MAX) + 1;
+/// The minimal alignment provided by this allocator, in bits.
 #[cfg(feature = "finer-grained")]
 pub const GRANULARITY_SHIFT: u32 = 3;
+/// The minimal alignment provided by this allocator, in bits.
 #[cfg(not(feature = "finer-grained"))]
 pub const GRANULARITY_SHIFT: u32 = 4;
+/// The minimal alignment provided by this allocator.
 pub const GRANULARITY: usize = 1 << GRANULARITY_SHIFT;
 
 const DIRECT_COUNT: usize = (ObjSizeType::SMALL_MAX >> GRANULARITY_SHIFT) + 1;
@@ -96,12 +101,14 @@ pub enum ObjSizeType {
     Large,
     Huge,
 }
-use array_macro::array;
 use ObjSizeType::*;
 
 impl ObjSizeType {
+    /// The maximal size of small-sized objects.
     pub const SMALL_MAX: usize = 1024;
+    /// The maximal size of medium-sized objects.
     pub const MEDIUM_MAX: usize = SHARD_SIZE;
+    /// The maximal size of larget-sized objects.
     pub const LARGE_MAX: usize = SLAB_SIZE / 2;
 }
 

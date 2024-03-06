@@ -216,9 +216,9 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
         let bi = BucketIndex::from_id(id);
         // SAFETY: `id` is freshly allocated, which belongs to no other thread.
         //
-        // Note that while `id` is freshly allocated, it may be reclaimed from another
-        // dead thread, which means its thread data entry can be already initialized and
-        // should not be `insert`ed unconditionally.
+        // Note that while  freshly allocated, the value of `id` may be reclaimed from
+        // another dead thread, which means its thread data entry can be already
+        // initialized and should not be `insert`ed unconditionally.
         let heap = unsafe {
             self.map_unchecked(|this| {
                 if let Some(heap) = this.get_inner(bi) {

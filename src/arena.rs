@@ -22,10 +22,12 @@ use crate::{
 
 const BYTE_WIDTH: usize = u8::BITS as usize;
 
+/// The minimal alignment required for [`Chunk`]s, in bits.
 pub const SLAB_SHIFT: u32 = 2 + 10 + 10;
+/// The minimal alignment required for [`Chunk`]s.
 pub const SLAB_SIZE: usize = 1 << SLAB_SHIFT;
 
-pub const fn slab_layout(n: usize) -> Layout {
+pub(crate) const fn slab_layout(n: usize) -> Layout {
     match Layout::from_size_align(n << SLAB_SHIFT, SLAB_SIZE) {
         Ok(layout) => layout,
         Err(_) => panic!("invalid slab layout"),
@@ -126,7 +128,7 @@ impl<B: BaseAlloc> Arena<B> {
     fn new_chunk<'a>(base: &B, chunk: Chunk<B>) -> Result<&'a mut Self, Error<B>> {
         let size = chunk.pointer().len();
         let slab_count = size / SLAB_SIZE;
-        assert!(chunk.pointer().is_aligned_to(SLAB_SIZE));
+        debug_assert!(chunk.pointer().is_aligned_to(SLAB_SIZE));
 
         let header_layout = Self::header_layout(slab_count, false);
         let header = base.allocate(header_layout, true).map_err(Error::Alloc)?;
@@ -439,11 +441,6 @@ impl<B: BaseAlloc> Arenas<B> {
     /// This function creates a new arena from the chunk and push it to the
     /// collection for further allocation, extending the heap's overall
     /// capacity.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if the alignment of the chunk is less then
-    /// [`SLAB_SIZE`].
     ///
     /// # Errors
     ///
