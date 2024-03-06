@@ -21,12 +21,6 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Download fuzzing data
-        uses: actions/download-artifact@v4
-        with:
-          name: fuzzing-data
-        continue-on-error: true
-
       - name: Install fuzzing utilities
         run: |
           cargo install cargo-fuzz
@@ -38,8 +32,28 @@ jobs:
           cp Cargo.toml Cargo.toml.bak
           cat Cargo.toml.bak | grep -v "lto" > Cargo.toml
 
+      - name: Get date
+        id: get-date
+        run: |
+          echo "today=$(/bin/date -u "+%Y%m%d")" >> $GITHUB_OUTPUT
+          echo "yesterday=$(/bin/date -u "+%Y%m%d")" >> $GITHUB_OUTPUT
+      
+      - name: Cache fuzzing data
+        uses: actions/cache@v4
+        with:
+          path: fuzzing-data
+          key: ${{ runner.os }}-fuzzing-data-${{ steps.get-date.outputs.today }}
+          restore-keys: |
+            ${{ runner.os }}-fuzzing-data-${{ steps.get-date.outputs.today }}
+            ${{ runner.os }}-fuzzing-data-${{ steps.get-date.outputs.yesterday }}
+            ${{ runner.os }}-fuzzing-data-
+            ${{ runner.os }}-
+
       - name: Fuzz target
         run: |
+          mkdir -p fuzzing-data/artifacts && cp -r fuzzing-data/artifacts fuzz
+          mkdir -p fuzzing-data/artifacts && cp -r fuzzing-data/corpus fuzz
+          mkdir -p fuzzing-data/artifacts && cp -r fuzzing-data/coverage fuzz
           cargo fuzz run stress &
           PID=$!
           sleep 60
@@ -49,16 +63,9 @@ jobs:
             -instr-profile=./fuzz/coverage/stress/coverage.profdata \
             -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/stress \
             -sources ./src | rustfilt > target/lcov.txt
-
-      - name: Upload fuzzing data
-        uses: actions/upload-artifact@v4
-        with:
-          name: fuzzing-data
-          path: |
-            ./fuzz/artifacts
-            ./fuzz/corpus
-            ./fuzz/coverage
-          overwrite: true
+          cp -rf fuzz/artifacts fuzzing-data
+          cp -rf fuzz/corpus fuzzing-data
+          cp -rf fuzz/coverage fuzzing-data
 
       - name: Upload coverage report
         uses: codecov/codecov-action@v4
