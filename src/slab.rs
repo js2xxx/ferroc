@@ -1,6 +1,8 @@
 mod block;
 mod cell_link;
 
+#[cfg(any(miri, feature = "track-valgrind"))]
+use core::sync::atomic::AtomicU8;
 use core::{
     cell::Cell,
     marker::PhantomData,
@@ -8,7 +10,7 @@ use core::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
     ptr::{self, addr_of_mut, NonNull},
-    sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering::*},
+    sync::atomic::{AtomicPtr, AtomicUsize, Ordering::*},
 };
 
 pub(crate) use self::block::BlockRef;
@@ -284,9 +286,64 @@ pub(crate) static EMPTY_SHARD: EmptyShard = EmptyShard(Shard {
     thread_free: AtomicBlockRef::new(),
 });
 
+/// The non-atomic version can cause a racy read-write, where thread #1 are
+/// setting `in_full` or `has_aligned` when thread #2 tries to check
+/// `has_aligned`.
+///
+/// This is a false alarm though, since:
+///
+/// 1. `in_full` can only be read/updated at its owned thread-local heap, and
+///    thus cannot be observed racily;
+/// 2. `has_aligned` is monotonous, and an aligned block must be returned to
+///    user only after `has_aligned` being set, let alone the block being passed
+///    to another thread and freed there (CORRECT? FIXME?).
 #[derive(Default)]
+#[cfg(not(any(miri, feature = "track-valgrind")))]
+pub(crate) struct ShardFlags(Cell<u8>);
+
+#[derive(Default)]
+#[cfg(any(miri, feature = "track-valgrind"))]
 pub(crate) struct ShardFlags(AtomicU8);
 
+#[cfg(not(any(miri, feature = "track-valgrind")))]
+impl ShardFlags {
+    const IS_IN_FULL: u8 = 0b0000_0001;
+    const HAS_ALIGNED: u8 = 0b0000_0010;
+
+    const fn new() -> Self {
+        Self(Cell::new(0))
+    }
+
+    pub(crate) fn is_in_full(&self) -> bool {
+        self.0.get() & Self::IS_IN_FULL != 0
+    }
+
+    pub(crate) fn set_in_full(&self, in_full: bool) {
+        if in_full {
+            self.0.set(self.0.get() | Self::IS_IN_FULL);
+        } else {
+            self.0.set(self.0.get() & !Self::IS_IN_FULL);
+        }
+    }
+
+    pub(crate) fn set_align(&self) {
+        self.0.set(self.0.get() | Self::HAS_ALIGNED);
+    }
+
+    pub(crate) fn test_zero(&self) -> bool {
+        self.0.get() == 0
+    }
+
+    pub(crate) unsafe fn has_aligned(this: *const ShardFlags) -> bool {
+        (*ptr::addr_of!((*this).0)).get() & Self::HAS_ALIGNED != 0
+    }
+
+    pub(crate) fn reset(&self) {
+        self.0.set(0)
+    }
+}
+
+#[cfg(any(miri, feature = "track-valgrind"))]
 impl ShardFlags {
     const IS_IN_FULL: u8 = 0b0000_0001;
     const HAS_ALIGNED: u8 = 0b0000_0010;
