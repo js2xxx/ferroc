@@ -33,8 +33,8 @@ use super::{BaseAlloc, Chunk, StaticHandle};
 /// ARENAS.manage(unsafe { Chunk::from_static(/* .. */) });
 ///
 /// // Use the heap.
-/// let cx = Context::new(&ARENAS);
-/// let heap = Heap::new(&cx);
+/// let cx = pin!(Context::new(&ARENAS));
+/// let heap = Heap::new(cx.as_ref());
 /// ```
 #[derive(Debug)]
 pub struct Static<const HEADER_CAP: usize> {

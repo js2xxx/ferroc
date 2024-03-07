@@ -10,8 +10,9 @@ use core::{
     cell::Cell,
     mem::MaybeUninit,
     num::NonZeroUsize,
+    pin::Pin,
     ptr::{self, NonNull},
-    sync::atomic::{AtomicU64, Ordering::*},
+    sync::atomic::Ordering::*,
 };
 
 use array_macro::array;
@@ -21,7 +22,7 @@ pub use self::thread_local::{ThreadData, ThreadLocal};
 use crate::{
     arena::{Arenas, Error, SHARD_SIZE, SLAB_SIZE},
     base::BaseAlloc,
-    slab::{BlockRef, Shard, ShardFlags, ShardList, Slab, EMPTY_SHARD},
+    slab::{BlockRef, Shard, ShardList, Slab, EMPTY_SHARD},
     track,
 };
 
@@ -95,6 +96,7 @@ pub const fn obj_size_type(size: usize) -> ObjSizeType {
 }
 
 /// The type of object sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ObjSizeType {
     Small,
     Medium,
@@ -107,7 +109,7 @@ impl ObjSizeType {
     /// The maximal size of small-sized objects.
     pub const SMALL_MAX: usize = 1024;
     /// The maximal size of medium-sized objects.
-    pub const MEDIUM_MAX: usize = SHARD_SIZE;
+    pub const MEDIUM_MAX: usize = SHARD_SIZE / 2;
     /// The maximal size of larget-sized objects.
     pub const LARGE_MAX: usize = SLAB_SIZE / 2;
 }
@@ -126,7 +128,6 @@ impl ObjSizeType {
 ///
 /// See [the crate-level documentation](crate) for its usage.
 pub struct Context<'arena, B: BaseAlloc> {
-    thread_id: u64,
     arena: &'arena Arenas<B>,
     free_shards: ShardList<'arena>,
     heap_count: Cell<usize>,
@@ -138,25 +139,19 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
     /// Unlike [`Arenas::new`], this function cannot be called during constant
     /// evaluation.
     pub fn new(arena: &'arena Arenas<B>) -> Self {
-        static ID: AtomicU64 = AtomicU64::new(1);
-        // SAFETY: ID is unique.
-        unsafe { Self::new_with_id(arena, ID.fetch_add(1, Relaxed)) }
-    }
-
-    /// # Safety
-    ///
-    /// `thread_id` must be unique with each live thread.
-    unsafe fn new_with_id(arena: &'arena Arenas<B>, thread_id: u64) -> Self {
         Context {
-            thread_id,
             arena,
             free_shards: Default::default(),
             heap_count: Cell::new(0),
         }
     }
 
+    fn thread_id(self: Pin<&Self>) -> usize {
+        (&*self as *const Self).addr()
+    }
+
     fn alloc_slab(
-        &self,
+        self: Pin<&Self>,
         count: NonZeroUsize,
         align: usize,
         is_large_or_huge: bool,
@@ -164,11 +159,11 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
     ) -> Result<&'arena Shard<'arena>, Error<B>> {
         let slab = self
             .arena
-            .allocate(self.thread_id, count, align, is_large_or_huge, direct)?;
+            .allocate(self.thread_id(), count, align, is_large_or_huge, direct)?;
         Ok(slab.into_shard())
     }
 
-    fn finalize_shard(&self, shard: &'arena Shard<'arena>) {
+    fn finalize_shard(self: Pin<&Self>, shard: &'arena Shard<'arena>) {
         match shard.fini() {
             Ok(Some(fini)) => {
                 self.free_shards.push(fini);
@@ -191,6 +186,7 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
 
 impl<'arena, B: BaseAlloc> Drop for Context<'arena, B> {
     fn drop(&mut self) {
+        #[cfg(debug_assertions)]
         debug_assert!(self.free_shards.is_empty());
         debug_assert_eq!(self.heap_count.get(), 0);
     }
@@ -212,7 +208,7 @@ struct Bin<'arena> {
 ///
 /// See [the crate-level documentation](crate) for its usage.
 pub struct Heap<'arena: 'cx, 'cx, B: BaseAlloc> {
-    cx: Option<&'cx Context<'arena, B>>,
+    cx: Option<Pin<&'cx Context<'arena, B>>>,
     direct_shards: [Cell<&'arena Shard<'arena>>; DIRECT_COUNT],
     shards: [Bin<'arena>; OBJ_SIZE_COUNT],
     full_shards: ShardList<'arena>,
@@ -247,7 +243,7 @@ fn drop_<T>(_t: T) {}
 impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// Creates a new heap from a memory allocator context.
     #[inline]
-    pub fn new(cx: &'cx Context<'arena, B>) -> Self {
+    pub fn new(cx: Pin<&'cx Context<'arena, B>>) -> Self {
         let mut heap = Self::new_uninit();
         unsafe { heap.init(cx) };
         heap
@@ -290,8 +286,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
     /// Tests if this heap is bound to a specific [context](Context).
     #[inline]
-    pub fn is_bound_to(&self, cx: &Context<'arena, B>) -> bool {
-        self.cx.is_some_and(|this| ptr::eq(this, cx))
+    pub fn is_bound_to(&self, cx: Pin<&Context<'arena, B>>) -> bool {
+        self.cx.is_some_and(|this| ptr::eq(&*this, &*cx))
     }
 
     /// Initializes this heap, binding it to a [context](Context).
@@ -306,7 +302,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// must not be called for those created with [`new`](Heap::new)
     /// (initialized upon creation).
     #[inline]
-    pub unsafe fn init(&mut self, cx: &'cx Context<'arena, B>) {
+    pub unsafe fn init(&mut self, cx: Pin<&'cx Context<'arena, B>>) {
         const MAX_HEAP_COUNT: usize = 1;
 
         let count = cx.heap_count.get() + 1;
@@ -407,21 +403,19 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         err_sink: impl FnOnce(Error<B>),
     ) -> Option<&Shard<'arena>> {
         let mut cursor = bin.list.cursor_head();
-        loop {
-            let Some(shard) = cursor.get() else { break };
-            if !shard.collect(false) {
-                shard.extend(bin.obj_size);
+        while let Some(shard) = cursor.get() {
+            if shard.collect(false) {
+                return Some(shard);
             }
-
-            if shard.has_free() {
+            if shard.extend(bin.obj_size) {
                 return Some(shard);
             }
 
-            cursor.remove();
-            self.update_direct(bin);
-
+            cursor.move_next();
+            
             shard.flags.set_in_full(true);
-            self.full_shards.push(shard);
+            bin.list.requeue_to(shard, &self.full_shards);
+            self.update_direct(bin);
         }
 
         // SAFETY: `cx` is initialized.
@@ -453,7 +447,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 let obj_size = shard.obj_size.load(Relaxed);
                 let i = obj_size_index(obj_size);
                 debug_assert!(i < OBJ_SIZE_COUNT);
-                let unfulled_bin = &self.shards[i];
+                // SAFETY: i < OBJ_SIZE_COUNT.
+                let unfulled_bin = unsafe { self.shards.get_unchecked(i) };
 
                 unfulled_bin.list.push(shard);
                 self.update_direct(unfulled_bin);
@@ -553,7 +548,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     ) -> Option<NonNull<()>> {
         if layout.size() <= ObjSizeType::LARGE_MAX
             && let index = obj_size_index(layout.size())
-            && let Some(shard) = self.shards[index].list.current()
+            // SAFETY: layout.size() <= ObjSizeType::LARGE_MAX means index < OBJ_SIZE_COUNT
+            && let Some(shard) = unsafe { self.shards.get_unchecked(index) }.list.current()
             && let Some((block, is_zeroed)) = shard.pop_block_aligned(layout.align())
         {
             Some(post_alloc(block, layout.size(), is_zeroed, zero))
@@ -729,18 +725,25 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         debug_assert_eq!(obj_size, shard.obj_size.load(Relaxed));
         if obj_size <= ObjSizeType::LARGE_MAX {
             let index = obj_size_index(obj_size);
-            let bin = &self.shards[index];
+            // SAFETY: layout.size() <= ObjSizeType::LARGE_MAX means index < OBJ_SIZE_COUNT.
+            let bin = unsafe { self.shards.get_unchecked(index) };
 
-            if bin.list.len() > 1 {
-                let _ret = bin.list.remove(shard);
+            if !bin.list.has_sole_member() {
+                bin.list.remove(shard);
                 self.update_direct(bin);
-                debug_assert!(_ret);
                 cx.finalize_shard(shard);
             }
         } else {
-            let _ret = self.huge_shards.remove(shard);
-            debug_assert!(_ret);
+            self.huge_shards.remove(shard);
             cx.finalize_shard(shard);
+        }
+    }
+
+    #[inline]
+    fn thread_id(&self) -> usize {
+        match self.cx {
+            Some(ref cx) => cx.thread_id(),
+            None => 0,
         }
     }
 
@@ -771,19 +774,18 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let thread_id = unsafe { ptr::addr_of!((*slab.as_ptr()).thread_id).read() };
         debug_assert_ne!(thread_id, 0);
 
-        if let Some(cx) = self.cx
-            && cx.thread_id == thread_id
-        {
-            if ShardFlags::test_zero(ptr::addr_of!((*shard.as_ptr()).flags)) {
+        if self.thread_id() == thread_id {
+            // SAFETY: We're in the same thread.
+            let shard = unsafe { shard.as_ref() };
+            if shard.flags.test_zero() {
                 track::deallocate(ptr, 0);
 
-                let shard = unsafe { shard.as_ref() };
-                let block = unsafe { BlockRef::from_raw(ptr.cast()) };
-                if shard.push_block(block) {
+                // SAFETY: flags is zero, this shard has no aligned blocks.
+                if shard.push_block(unsafe { BlockRef::from_raw(ptr.cast()) }) {
                     self.free_shard(shard, shard.obj_size.load(Relaxed))
                 }
             } else {
-                self.free_contended(ptr, shard, true)
+                self.free_contended(ptr, shard.into(), true)
             }
         } else {
             self.free_contended(ptr, shard, false)
@@ -803,26 +805,22 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         if is_local {
             let shard = unsafe { shard.as_ref() };
 
-            let was_full = shard.flags.is_in_full();
             let is_unused = shard.push_block(block);
+            if is_unused {
+                self.free_shard(shard, shard.obj_size.load(Relaxed))
+            } else if shard.flags.is_in_full() {
+                debug_assert!(!is_unused);
 
-            if is_unused || was_full {
                 let obj_size = shard.obj_size.load(Relaxed);
+                let index = obj_size_index(obj_size);
 
-                if was_full {
-                    let index = obj_size_index(obj_size);
-                    let bin = &self.shards[index];
+                shard.flags.set_in_full(false);
 
-                    let _ret = self.full_shards.remove(shard);
-                    debug_assert!(_ret);
-                    shard.flags.set_in_full(false);
-                    bin.list.push(shard);
-                    self.update_direct(bin);
-                }
-
-                if is_unused {
-                    self.free_shard(shard, obj_size)
-                }
+                debug_assert_ne!(obj_size_type(obj_size), ObjSizeType::Huge);
+                // SAFETY: Huge shard cannot be full.
+                let bin = unsafe { self.shards.get_unchecked(index) };
+                self.full_shards.requeue_to(shard, &bin.list);
+                self.update_direct(bin);
             }
         } else {
             // We're deallocating from another thread.

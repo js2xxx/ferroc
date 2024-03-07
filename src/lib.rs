@@ -95,6 +95,7 @@
 //! features:
 //! ```rust
 //! #![feature(allocator_api)]
+//! use core::pin::pin;
 //! use ferroc::{
 //!     arena::Arenas,
 //!     heap::{Heap, Context},
@@ -102,8 +103,8 @@
 //! };
 //!
 //! let arenas = Arenas::new(Mmap); // `Arenas` are `Send` & `Sync`...
-//! let cx = Context::new(&arenas);
-//! let heap = Heap::new(&cx); // ...while `Context`s and `Heap`s are not.
+//! let cx = pin!(Context::new(&arenas));
+//! let heap = Heap::new(cx.as_ref()); // ...while `Context`s and `Heap`s are not.
 //!
 //! // Using the allocator API.
 //! let mut vec = Vec::new_in(&heap);
