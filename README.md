@@ -89,7 +89,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |\
     sh -- -y --toolchain nightly --profile minimal -c rust-src
 ```
 
-2. Just `CMake` and `make` it:
+2. Just `cmake` and `make` it:
 
 ```bash
 mkdir target && cd target
@@ -102,11 +102,10 @@ cmake .. && make
 sudo make install
 ```
 
-Common options like `--install-prefix` are supported naturally by CMake.
+Common options like `--install-prefix` and `--config` are supported naturally by CMake.
 
 There are also some custom options (via `cmake -D`) you can enable:
 
-- `FE_DEBUG`: Enable debug builds (assertions + debug infos);
 - `FE_TRACK_VALGRIND`: See [`"track-valgrind"`](#cargo-features) above;
 - `FE_FINER_GRAINED`: See [`"finer-grained"`](#cargo-features) above.
 
