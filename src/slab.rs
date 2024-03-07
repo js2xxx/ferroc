@@ -611,7 +611,7 @@ impl<'a> Shard<'a> {
         slab_count: NonZeroUsize,
         base: &B,
     ) -> Result<(), Error<B>> {
-        debug_assert!(obj_size > SHARD_SIZE);
+        debug_assert!(obj_size > ObjSizeType::MEDIUM_MAX);
 
         let (slab, _) = unsafe { self.slab::<B>() };
         slab.used.set(slab.used.get() + 1);
@@ -619,7 +619,6 @@ impl<'a> Shard<'a> {
         self.obj_size.store(obj_size, Relaxed);
         let usable_size = SLAB_SIZE * slab_count.get() - SHARD_SIZE * Slab::<B>::HEADER_COUNT;
         let cap_limit = usable_size / obj_size;
-        debug_assert!(cap_limit > 1);
         self.cap_limit.set(cap_limit);
         self.flags.reset();
 
@@ -645,7 +644,7 @@ impl<'a> Shard<'a> {
         obj_size: usize,
         base: &B,
     ) -> Result<Option<&'a Shard<'a>>, Error<B>> {
-        debug_assert!(obj_size <= SLAB_SIZE / 2);
+        debug_assert!(obj_size <= ObjSizeType::LARGE_MAX);
 
         if obj_size > ObjSizeType::MEDIUM_MAX {
             self.init_large_or_huge(obj_size, NonZeroUsize::MIN, base)?;
