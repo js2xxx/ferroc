@@ -8,6 +8,7 @@ mod thread_local;
 use core::{
     alloc::{AllocError, Allocator, Layout},
     cell::Cell,
+    hint,
     mem::MaybeUninit,
     num::NonZeroUsize,
     pin::Pin,
@@ -22,7 +23,7 @@ pub use self::thread_local::{ThreadData, ThreadLocal};
 use crate::{
     arena::{Arenas, Error, SHARD_SIZE, SLAB_SIZE},
     base::BaseAlloc,
-    slab::{BlockRef, Shard, ShardList, Slab, EMPTY_SHARD},
+    slab::{AtomicBlockRef, BlockRef, Shard, ShardList, Slab, EMPTY_SHARD},
     track,
 };
 
@@ -232,6 +233,7 @@ pub struct Heap<'arena: 'cx, 'cx, B: BaseAlloc> {
     shards: [Bin<'arena>; OBJ_SIZE_COUNT],
     full_shards: ShardList<'arena>,
     huge_shards: ShardList<'arena>,
+    delayed_free: AtomicBlockRef<'arena>,
 }
 
 fn log_error<B: BaseAlloc>(err: Error<B>) {
@@ -274,6 +276,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             shards: array![index => Bin::new(index); OBJ_SIZE_COUNT],
             full_shards: ShardList::DEFAULT,
             huge_shards: ShardList::DEFAULT,
+            delayed_free: AtomicBlockRef::new(),
         }
     }
 
@@ -322,7 +325,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let count = (Slab::<B>::HEADER_COUNT * SHARD_SIZE + size).div_ceil(SLAB_SIZE);
         let count = NonZeroUsize::new(count).unwrap();
         let shard = stry!(cx.alloc_slab(count, SHARD_SIZE, true, true));
-        stry!(shard.init_large_or_huge(size, count, cx.arena.base()));
+        let delayed_free = NonNull::from(&self.delayed_free);
+        stry!(shard.init_large_or_huge(size, count, delayed_free, cx.arena.base()));
         self.huge_shards.push(shard);
 
         debug_assert!(shard.has_free());
@@ -411,7 +415,11 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let cx = unsafe { self.cx.unwrap_unchecked() };
         macro_rules! add_fresh {
             ($fresh:ident) => {
-                if let Some(next) = stry!($fresh.init(bin.obj_size, cx.arena.base())) {
+                if let Some(next) = stry!($fresh.init(
+                    bin.obj_size,
+                    NonNull::from(&self.delayed_free),
+                    cx.arena.base()
+                )) {
                     cx.free_shards.push(next);
                 }
                 bin.list.push($fresh);
@@ -428,24 +436,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
 
         // 2. Try to collect & unfull some shards (freed from other threads);
-        let unfulled = self.full_shards.drain(|shard| shard.collect(false));
-        if let Some(unfulled) = {
-            unfulled.fold(None, |acc, shard| {
-                shard.flags.set_in_full(false);
-
-                let obj_size = shard.obj_size.load(Relaxed);
-                let i = obj_size_index(obj_size);
-                debug_assert!(i < OBJ_SIZE_COUNT);
-                // SAFETY: i < OBJ_SIZE_COUNT.
-                let unfulled_bin = unsafe { self.shards.get_unchecked(i) };
-
-                unfulled_bin.list.push(shard);
-                self.update_direct(unfulled_bin);
-                acc.or_else(|| ptr::eq(bin, unfulled_bin).then_some(shard))
-            })
-        } {
-            return Some(unfulled);
-        }
+        // However, full shards will be unfulled when `try_free_delayed` is called, so
+        // we don't iterate and unfull it here. Keeping that list simply prevents full
+        // shards being iterated everytime on the loop above.
 
         // 3. Try to clear abandoned huge shards and allocate/reclaim a slab.
 
@@ -479,6 +472,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// `cx` must be initialized.
     #[cold]
     unsafe fn pop_contended(&self, size: usize, zero: bool) -> Option<NonNull<()>> {
+        self.try_free_delayed(false);
+
         if size > ObjSizeType::LARGE_MAX {
             return self.pop_huge(size, zero);
         }
@@ -591,12 +586,13 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         layout: Layout,
         zero: bool,
         options: AllocateOptions<F>,
-    ) -> Option<NonNull<()>>
+    ) -> Result<NonNull<()>, AllocError>
     where
         F: FnOnce() -> &'a Self,
     {
         let fallback = options.fallback;
         self.allocate_inner(layout, zero, fallback)
+            .ok_or(AllocError)
     }
 
     #[cfg(feature = "c")]
@@ -616,12 +612,10 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     ///
     /// # Errors
     ///
-    /// Errors are returned when allocation fails, see [`Error`] for more
-    /// information.
+    /// [`AllocError`] are returned when allocation fails.
     #[inline]
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<()>, AllocError> {
         self.allocate_with(layout, false, Self::options())
-            .ok_or(AllocError)
     }
 
     /// Allocate a zeroed memory block of `layout`.
@@ -631,12 +625,10 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     ///
     /// # Errors
     ///
-    /// Errors are returned when allocation fails, see [`Error`] for more
-    /// information.
+    /// [`AllocError`] are returned when allocation fails.
     #[inline]
     pub fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<()>, AllocError> {
         self.allocate_with(layout, true, Self::options())
-            .ok_or(AllocError)
     }
 
     /// Retrieves the layout information of a specific allocation.
@@ -705,6 +697,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         unsafe { self.free(ptr) }
     }
 
+    /// # Safety
+    ///
+    /// `cx` must be initialized.
     unsafe fn free_shard(&self, shard: &'arena Shard<'arena>, obj_size: usize) {
         debug_assert!(shard.is_unused());
         let cx = self.cx.unwrap_unchecked();
@@ -726,6 +721,50 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
     }
 
+    fn try_free_delayed(&self, no_more: bool) -> bool {
+        let delayed_free = self.delayed_free.get();
+
+        let mut ptr = delayed_free.load(Relaxed);
+        let mut block_slot = loop {
+            let Some(block) = NonNull::new(ptr) else {
+                return true;
+            };
+            match delayed_free.compare_exchange_weak(ptr, ptr::null_mut(), AcqRel, Acquire) {
+                Ok(_) => break Some(unsafe { BlockRef::from_raw(block) }),
+                Err(b) => ptr = b,
+            }
+        };
+
+        let mut cleared = true;
+        while let Some(mut block) = block_slot {
+            block_slot = block.take_next();
+
+            let ptr = block.as_ptr();
+            // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
+            let slab = unsafe { Slab::<B>::from_ptr(ptr).unwrap_unchecked() };
+            // SAFETY: The block is ours, and so is this shard.
+            let shard = unsafe { Slab::shard_meta(slab, ptr.cast()).as_ref() };
+
+            if shard.reset_delayed(no_more) {
+                // SAFETY: Uninit heaps cannot have deallocated blocks.
+                unsafe { self.free_block(shard, block) };
+            } else {
+                let mut cur = delayed_free.load(Relaxed);
+                loop {
+                    // SAFETY: `delayed_free` owns a list of blocks.
+                    block.set_next(NonNull::new(cur).map(|p| unsafe { BlockRef::from_raw(p) }));
+                    let new = block.as_ptr().as_ptr();
+                    match delayed_free.compare_exchange_weak(cur, new, Release, Relaxed) {
+                        Ok(_) => break,
+                        Err(e) => cur = e,
+                    }
+                }
+                cleared = false;
+            }
+        }
+        cleared
+    }
+
     #[inline]
     fn thread_id(&self) -> usize {
         match self.cx {
@@ -734,11 +773,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
     }
 
-    /// # Errors
-    ///
-    /// [`Error::Uninit`] is returned if the heap needs to be initialized first
-    /// before deallocating this pointer.
-    ///
     /// # Safety
     ///
     /// - `ptr` must point to an owned, valid memory block, previously allocated
@@ -788,30 +822,38 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     ) {
         // SAFETY: `ptr` is in `shard`.
         let block = unsafe { Shard::block_of(shard, ptr.cast()) };
-        track::deallocate(NonNull::new_unchecked(block.as_ptr().cast()), 0);
+        track::deallocate(block.as_ptr().cast(), 0);
         if is_local {
             let shard = unsafe { shard.as_ref() };
 
-            let is_unused = shard.push_block(block);
-            if is_unused {
-                self.free_shard(shard, shard.obj_size.load(Relaxed))
-            } else if shard.flags.is_in_full() {
-                debug_assert!(!is_unused);
-
-                let obj_size = shard.obj_size.load(Relaxed);
-                let index = obj_size_index(obj_size);
-
-                shard.flags.set_in_full(false);
-
-                debug_assert_ne!(obj_size_type(obj_size), ObjSizeType::Huge);
-                // SAFETY: Huge shard cannot be full.
-                let bin = unsafe { self.shards.get_unchecked(index) };
-                self.full_shards.requeue_to(shard, &bin.list);
-                self.update_direct(bin);
-            }
+            self.free_block(shard, block);
         } else {
             // We're deallocating from another thread.
             unsafe { Shard::push_block_mt(shard, block) }
+        }
+    }
+
+    /// # Safety
+    ///
+    /// `block` must be in `shard`, which currently belongs to `self`, whose
+    /// `cx` must be initialized.
+    unsafe fn free_block(&self, shard: &'arena Shard<'arena>, block: BlockRef<'arena>) {
+        let is_unused = shard.push_block(block);
+        if is_unused {
+            self.free_shard(shard, shard.obj_size.load(Relaxed))
+        } else if shard.flags.is_in_full() {
+            debug_assert!(!is_unused);
+
+            let obj_size = shard.obj_size.load(Relaxed);
+            let index = obj_size_index(obj_size);
+
+            shard.flags.set_in_full(false);
+
+            debug_assert_ne!(obj_size_type(obj_size), ObjSizeType::Huge);
+            // SAFETY: Huge shard cannot be full.
+            let bin = unsafe { self.shards.get_unchecked(index) };
+            self.full_shards.requeue_to(shard, &bin.list);
+            self.update_direct(bin);
         }
     }
 
@@ -838,15 +880,20 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// Those 2 lists will be swapped if the former becomes empty during the
     /// allocation process, which is precisely what this function does.
     pub fn collect(&self, force: bool) {
+        if !self.is_init() {
+            return;
+        }
         let shards = self.shards.iter().flat_map(|bin| &bin.list);
         shards.for_each(|shard| {
             shard.collect(force);
         });
 
-        if self.is_init() {
-            // SAFETY: `self` is initialized.
-            unsafe { self.collect_huge() };
+        while !self.try_free_delayed(false) && force {
+            hint::spin_loop();
         }
+
+        // SAFETY: `self` is initialized.
+        unsafe { self.collect_huge() };
 
         if force && let Some(cx) = self.cx {
             cx.arena.reclaim_all();
@@ -857,6 +904,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 impl<'arena: 'cx, 'cx, B: BaseAlloc> Drop for Heap<'arena, 'cx, B> {
     fn drop(&mut self) {
         if let Some(cx) = self.cx.take() {
+            self.try_free_delayed(true);
+
             let iter = (self.shards.iter().map(|bin| &bin.list))
                 .chain([&self.huge_shards, &self.full_shards]);
             iter.flat_map(|l| l.drain(|_| true)).for_each(|shard| {
@@ -871,17 +920,13 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Drop for Heap<'arena, 'cx, B> {
 
 unsafe impl<'arena: 'cx, 'cx, B: BaseAlloc> Allocator for Heap<'arena, 'cx, B> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        match self.allocate_with(layout, false, Self::options()) {
-            Some(t) => Ok(NonNull::from_raw_parts(t, layout.size())),
-            None => Err(AllocError),
-        }
+        self.allocate_with(layout, false, Self::options())
+            .map(|t| NonNull::from_raw_parts(t, layout.size()))
     }
 
     fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        match self.allocate_with(layout, true, Self::options()) {
-            Some(t) => Ok(NonNull::from_raw_parts(t, layout.size())),
-            None => Err(AllocError),
-        }
+        self.allocate_with(layout, true, Self::options())
+            .map(|t| NonNull::from_raw_parts(t, layout.size()))
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {

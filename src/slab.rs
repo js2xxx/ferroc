@@ -5,6 +5,7 @@ mod cell_link;
 use core::sync::atomic::AtomicU8;
 use core::{
     cell::Cell,
+    hint,
     marker::PhantomData,
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
@@ -13,11 +14,8 @@ use core::{
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering::*},
 };
 
-pub(crate) use self::block::BlockRef;
-use self::{
-    block::AtomicBlockRef,
-    cell_link::{CellLink, CellLinked, CellList},
-};
+pub(crate) use self::block::{AtomicBlockRef, BlockRef};
+use self::cell_link::{CellLink, CellLinked, CellList};
 use crate::{
     arena::{Error, SHARD_COUNT, SHARD_SIZE, SLAB_SIZE},
     base::{BaseAlloc, Chunk},
@@ -284,6 +282,7 @@ pub(crate) static EMPTY_SHARD: EmptyShard = EmptyShard(Shard {
     flags: ShardFlags::new(),
     free_is_zero: Cell::new(false),
     thread_free: AtomicBlockRef::new(),
+    delayed_free: AtomicPtr::new(ptr::null_mut()),
 });
 
 /// The non-atomic version can cause a racy read-write, where thread #1 are
@@ -407,6 +406,7 @@ pub(crate) struct Shard<'a> {
     free_is_zero: Cell<bool>,
 
     thread_free: AtomicBlockRef<'a>,
+    delayed_free: AtomicPtr<AtomicBlockRef<'a>>,
 }
 
 impl<'a> CellLinked<'a> for Shard<'a> {
@@ -504,53 +504,6 @@ impl<'a> Shard<'a> {
         self.used.get() == 0
     }
 
-    /// This method don't update the usage of the shard, which will be updated
-    /// when collecting.
-    ///
-    /// # Safety
-    ///
-    /// `this` must point to a valid `Shard<'a>` without any mutable reference.
-    pub(crate) unsafe fn push_block_mt(this: NonNull<Self>, mut block: BlockRef<'a>) {
-        // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
-        // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
-        let thread_free = unsafe { &*ptr::addr_of!((*this.as_ptr()).thread_free) }.get();
-
-        let mut cur = thread_free.load(Relaxed);
-        loop {
-            // SAFETY: `thread_free` owns a list of blocks.
-            block.set_next(NonNull::new(cur).map(|p| unsafe { BlockRef::from_raw(p) }));
-
-            let new = block.as_ptr();
-            match thread_free.compare_exchange_weak(cur, new, Release, Relaxed) {
-                Ok(_) => break,
-                Err(e) => cur = e,
-            }
-        }
-    }
-
-    fn collect_thread_free(&self) {
-        let mut ptr = self.thread_free.get().load(Relaxed);
-        let mut thread_free = loop {
-            match NonNull::new(ptr) {
-                None => return,
-                Some(nn) => match self.thread_free.get().compare_exchange_weak(
-                    ptr,
-                    ptr::null_mut(),
-                    AcqRel,
-                    Acquire,
-                ) {
-                    // SAFETY: Every pointer residing in `thread_free` points to a valid block.
-                    Ok(_) => break unsafe { BlockRef::from_raw(nn) },
-                    Err(e) => ptr = e,
-                },
-            }
-        };
-
-        let count = thread_free.set_tail(self.local_free.take());
-        self.local_free.set(Some(thread_free));
-        self.used.set(self.used.get() - count);
-    }
-
     pub(crate) fn collect(&self, force: bool) -> bool {
         if force || !self.thread_free.get().load(Relaxed).is_null() {
             self.collect_thread_free();
@@ -583,6 +536,152 @@ impl<'a> Shard<'a> {
             }
         }
         true
+    }
+}
+
+const VACANT: u8 = 0;
+const OCCUPIED: u8 = 1;
+const SATURATED: u8 = 2;
+const NEVER: u8 = 3;
+const TAG_MASK: usize = 3;
+
+impl<'a> Shard<'a> {
+    fn compose_mt(ptr: Option<NonNull<()>>, tag: u8) -> *mut () {
+        debug_assert!(usize::from(tag) <= TAG_MASK);
+        ptr.map_or(ptr::null_mut(), NonNull::as_ptr)
+            .map_addr(|addr| addr | usize::from(tag))
+    }
+
+    fn decompose_mt(ptr: *mut ()) -> (Option<NonNull<()>>, u8) {
+        let tag = (ptr.addr() & TAG_MASK) as u8;
+        (NonNull::new(ptr.map_addr(|addr| addr & !TAG_MASK)), tag)
+    }
+
+    /// This method don't update the usage of the shard, which will be updated
+    /// when collecting.
+    ///
+    /// # Safety
+    ///
+    /// `this` must point to a valid `Shard<'a>` without any mutable reference.
+    pub(crate) unsafe fn push_block_mt(this: NonNull<Self>, mut block: BlockRef<'a>) {
+        // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
+        // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
+        let thread_free = unsafe { &*ptr::addr_of!((*this.as_ptr()).thread_free) }.get();
+
+        let mut cur = thread_free.load(Relaxed);
+        let mut delayed;
+        loop {
+            let (cur_ptr, cur_tag) = Self::decompose_mt(cur);
+            delayed = cur_tag == VACANT;
+            let new = if delayed {
+                Self::compose_mt(cur_ptr, OCCUPIED)
+            } else {
+                // SAFETY: `thread_free` owns a list of blocks.
+                block.set_next(cur_ptr.map(|p| unsafe { BlockRef::from_raw(p) }));
+                Self::compose_mt(Some(block.as_ptr()), cur_tag)
+            };
+            match thread_free.compare_exchange_weak(cur, new, Release, Relaxed) {
+                Ok(_) => break,
+                Err(e) => cur = e,
+            }
+        }
+
+        if delayed {
+            // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
+            // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
+            let delayed_free =
+                unsafe { (*ptr::addr_of!((*this.as_ptr()).delayed_free)).load(Acquire) };
+            debug_assert!(!delayed_free.is_null());
+            // SAFETY: The heap of this shard will wait for `OCCUPIED` -> `NEVER` before its
+            // drop.
+            let delayed_free = unsafe { (*delayed_free).get() };
+
+            let mut cur = delayed_free.load(Relaxed);
+            loop {
+                // SAFETY: `delayed_free` owns a list of blocks.
+                block.set_next(NonNull::new(cur).map(|p| unsafe { BlockRef::from_raw(p) }));
+                let new = block.as_ptr().as_ptr();
+                match delayed_free.compare_exchange_weak(cur, new, Release, Relaxed) {
+                    Ok(_) => break,
+                    Err(e) => cur = e,
+                }
+            }
+
+            let mut cur = thread_free.load(Relaxed);
+            loop {
+                let (cur_ptr, cur_tag) = Self::decompose_mt(cur);
+                debug_assert_eq!(cur_tag, OCCUPIED);
+                let saturated = Self::compose_mt(cur_ptr, SATURATED);
+                match thread_free.compare_exchange_weak(cur, saturated, Release, Relaxed) {
+                    Ok(_) => break,
+                    Err(c) => cur = c,
+                }
+            }
+        }
+
+        mem::forget(block);
+    }
+
+    fn set_delayed_tag(&self, tag: u8, max_trial: usize) -> bool {
+        let thread_free = self.thread_free.get();
+        let mut cur = thread_free.load(Relaxed);
+        let mut trial = 0;
+        loop {
+            let (cur_ptr, cur_tag) = Self::decompose_mt(cur);
+            match cur_tag {
+                _ if cur_tag == tag => break true,
+                OCCUPIED => {
+                    if trial > max_trial {
+                        break false;
+                    }
+                    trial += 1;
+                    hint::spin_loop();
+                }
+                NEVER => break false,
+                _ => debug_assert!(matches!(cur_tag, VACANT | SATURATED)),
+            }
+            let new = Self::compose_mt(cur_ptr, tag);
+            match thread_free.compare_exchange_weak(cur, new, Release, Relaxed) {
+                Ok(_) => break true,
+                Err(c) => cur = c,
+            }
+        }
+    }
+
+    pub(crate) fn reset_delayed(&self, no_more: bool) -> bool {
+        if no_more {
+            self.set_delayed_tag(NEVER, usize::MAX)
+        } else {
+            self.set_delayed_tag(VACANT, 5)
+        }
+    }
+
+    fn mark_never_delayed(&self) {
+        self.set_delayed_tag(NEVER, usize::MAX);
+    }
+
+    fn collect_thread_free(&self) {
+        let mut ptr = self.thread_free.get().load(Relaxed);
+        let mut thread_free = loop {
+            let (cur_ptr, cur_tag) = Self::decompose_mt(ptr);
+            match cur_ptr {
+                None => return,
+                Some(nn) => match self.thread_free.get().compare_exchange_weak(
+                    ptr,
+                    Self::compose_mt(None, cur_tag),
+                    AcqRel,
+                    Acquire,
+                ) {
+                    // SAFETY: Every pointer residing in `thread_free` points to a valid block.
+                    Ok(_) => break unsafe { BlockRef::from_raw(nn) },
+                    Err(e) => ptr = e,
+                },
+            }
+        };
+
+        let count = thread_free.set_tail(self.local_free.take());
+        self.local_free.set(Some(thread_free));
+        self.used.set(self.used.get() - count);
     }
 }
 
@@ -674,6 +773,7 @@ impl<'a> Shard<'a> {
         &self,
         obj_size: usize,
         slab_count: NonZeroUsize,
+        delayed_free: NonNull<AtomicBlockRef<'a>>,
         base: &B,
     ) -> Result<(), Error<B>> {
         debug_assert!(obj_size > ObjSizeType::MEDIUM_MAX);
@@ -686,6 +786,8 @@ impl<'a> Shard<'a> {
         let cap_limit = usable_size / obj_size;
         self.cap_limit.set(cap_limit);
         self.flags.reset();
+        self.delayed_free.store(delayed_free.as_ptr(), Release);
+        self.set_delayed_tag(VACANT, usize::MAX);
 
         self.capacity.set(0);
         self.free.set(None);
@@ -707,12 +809,13 @@ impl<'a> Shard<'a> {
     pub(crate) fn init<B: BaseAlloc + 'a>(
         &self,
         obj_size: usize,
+        delayed_free: NonNull<AtomicBlockRef<'a>>,
         base: &B,
     ) -> Result<Option<&'a Shard<'a>>, Error<B>> {
         debug_assert!(obj_size <= ObjSizeType::LARGE_MAX);
 
         if obj_size > ObjSizeType::MEDIUM_MAX {
-            self.init_large_or_huge(obj_size, NonZeroUsize::MIN, base)?;
+            self.init_large_or_huge(obj_size, NonZeroUsize::MIN, delayed_free, base)?;
             debug_assert!(self.cap_limit.get() > 1);
             return Ok(None);
         }
@@ -730,6 +833,8 @@ impl<'a> Shard<'a> {
         debug_assert!(cap_limit > 1);
         self.cap_limit.set(cap_limit);
         self.flags.reset();
+        self.delayed_free.store(delayed_free.as_ptr(), Release);
+        self.set_delayed_tag(VACANT, usize::MAX);
 
         self.capacity.set(0);
         self.free.set(None);
@@ -754,6 +859,8 @@ impl<'a> Shard<'a> {
     pub(crate) fn fini<B: BaseAlloc + 'a>(&self) -> Result<Option<&Self>, SlabRef<B>> {
         #[cfg(debug_assertions)]
         debug_assert!(!self.link.is_linked());
+        self.mark_never_delayed();
+        self.delayed_free.store(ptr::null_mut(), Release);
 
         let (slab, _) = unsafe { self.slab::<B>() };
         if self.is_unused() {

@@ -120,7 +120,6 @@ macro_rules! config_inner {
                 thread::with_lazy(|heap, fallback| {
                     let options = AllocateOptions::new(fallback);
                     heap.allocate_with(layout, false, options)
-                        .ok_or(core::alloc::AllocError)
                 })
             }
 
@@ -142,7 +141,6 @@ macro_rules! config_inner {
                 thread::with_lazy(|heap, fallback| {
                     let options = AllocateOptions::new(fallback);
                     heap.allocate_with(layout, true, options)
-                        .ok_or(core::alloc::AllocError)
                 })
             }
 
@@ -187,10 +185,8 @@ macro_rules! config_inner {
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
                 thread::with_lazy(|heap, fallback|
-                    match heap.allocate_with(layout, false, Heap::options().fallback(fallback)) {
-                        Some(t) => Ok(core::ptr::NonNull::from_raw_parts(t, layout.size())),
-                        None => Err(core::alloc::AllocError)
-                    }
+                    heap.allocate_with(layout, false, Heap::options().fallback(fallback))
+                        .map(|t| core::ptr::NonNull::from_raw_parts(t, layout.size()))
                 )
             }
 
@@ -199,10 +195,8 @@ macro_rules! config_inner {
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
                 thread::with_lazy(|heap, fallback|
-                    match heap.allocate_with(layout, true, Heap::options().fallback(fallback)) {
-                        Some(t) => Ok(core::ptr::NonNull::from_raw_parts(t, layout.size())),
-                        None => Err(core::alloc::AllocError)
-                    }
+                    heap.allocate_with(layout, true, Heap::options().fallback(fallback))
+                        .map(|t| core::ptr::NonNull::from_raw_parts(t, layout.size()))
                 )
             }
 
