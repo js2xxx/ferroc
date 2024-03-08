@@ -191,8 +191,8 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
         Iter(self.head.get())
     }
 
-    pub fn cursor_head<'list>(&'list self) -> CellCursor<'a, 'list, T> {
-        CellCursor { list: self, cur: self.head.get() }
+    pub fn cursor_head(&self) -> CellCursor<'a, T> {
+        CellCursor { cur: self.head.get() }
     }
 
     /// # Arguments
@@ -265,29 +265,16 @@ impl<'a, 'list, T: CellLinked<'a>, F: FnMut(&'a T) -> bool> Drop for Drain<'a, '
     }
 }
 
-pub struct CellCursor<'a, 'list, T: CellLinked<'a>> {
-    list: &'list CellList<'a, T>,
+pub struct CellCursor<'a, T: CellLinked<'a>> {
     cur: Option<&'a T>,
 }
 
-impl<'a, 'list, T: CellLinked<'a>> CellCursor<'a, 'list, T> {
-    pub fn move_next(&mut self) -> bool {
-        let next = self.cur.take().and_then(|cur| cur.link().next.get());
-        self.cur = next;
-        next.is_some()
+impl<'a, T: CellLinked<'a>> CellCursor<'a, T> {
+    pub fn move_next(&mut self) {
+        self.cur = self.cur.and_then(|cur| cur.link().next.get());
     }
 
     pub fn get(&self) -> Option<&'a T> {
         self.cur
-    }
-
-    pub fn remove(&mut self) -> Option<&'a T> {
-        let cur = self.cur.take();
-        let next = cur.and_then(|cur| cur.link().next.get());
-        self.cur = next;
-        if let Some(cur) = cur {
-            self.list.remove(cur);
-        }
-        cur
     }
 }

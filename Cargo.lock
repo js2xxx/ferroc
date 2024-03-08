@@ -160,6 +160,7 @@ dependencies = [
  "ctor",
  "fastrand",
  "libc",
+ "log",
  "memmap2",
 ]
 

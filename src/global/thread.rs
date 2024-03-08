@@ -21,9 +21,9 @@ macro_rules! thread_statics {
         }
 
         #[inline(always)]
-        pub fn with_lazy<'a, T, F>(f: F) -> T
+        pub fn with_lazy<T, F>(f: F) -> T
         where
-            F: FnOnce(&'a Heap, fn() -> &'a Heap<'static, 'static>) -> T,
+            F: for<'a> FnOnce(&'a Heap<'static, 'static>, fn() -> &'a Heap<'static, 'static>) -> T,
         {
             fn fallback<'a>() -> &'a Heap<'static, 'static> {
                 let (heap, id) = Pin::static_ref(&THREAD_LOCALS).assign();

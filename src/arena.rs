@@ -578,6 +578,7 @@ pub enum Error<B: BaseAlloc> {
     Unsupported(Layout),
 }
 
+#[cfg(feature = "base-mmap")]
 const _: [(); mem::needs_drop::<Error<crate::base::Mmap>>() as usize] = [];
 
 impl<B: BaseAlloc> core::fmt::Display for Error<B>
@@ -587,7 +588,7 @@ where
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::Alloc(err) => write!(f, "base allocation failed: {err}"),
-            Error::Commit(err) => write!(f, "base commission failed: {err}"),
+            Error::Commit(err) => write!(f, "base allocator failed for committing memory: {err}"),
             Error::ArenaExhausted => write!(f, "the arena collection is full of arenas"),
             Error::Unsupported(layout) => write!(f, "unsupported layout: {layout:?}"),
         }
