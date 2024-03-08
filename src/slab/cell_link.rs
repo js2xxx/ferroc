@@ -73,30 +73,37 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
         #[cfg(debug_assertions)]
         value.link().linked_to.set((self as *const Self).addr());
 
-        let next = self.head.take();
+        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it must be
+        // replaced with a `take`.
+        let next = self.head.get();
         value.link().next.set(next);
         match next {
             Some(next) => next.link().prev.set(Some(value)),
             None => self.tail.set(Some(value)),
         }
         self.head.set(Some(value));
+
         #[cfg(debug_assertions)]
         self.len.set(self.len.get() + 1);
     }
 
     pub fn pop(&self) -> Option<&'a T> {
-        self.head.take().inspect(|value| {
-            #[cfg(debug_assertions)]
-            self.len.set(self.len.get() - 1);
-            let next = value.link().next.take();
-            match next {
-                Some(next) => next.link().prev.set(None),
-                None => self.tail.set(None),
-            }
-            self.head.set(next);
-            #[cfg(debug_assertions)]
-            value.link().linked_to.set(0);
-        })
+        let value = self.head.get()?;
+        #[cfg(debug_assertions)]
+        self.len.set(self.len.get() - 1);
+
+        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it must be
+        // replaced with a `take`.
+        let next = value.link().next.take();
+        match next {
+            Some(next) => next.link().prev.set(None),
+            None => self.tail.set(None),
+        }
+        self.head.set(next);
+
+        #[cfg(debug_assertions)]
+        value.link().linked_to.set(0);
+        Some(value)
     }
 
     #[cfg(debug_assertions)]
@@ -107,9 +114,11 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
     pub fn remove(&self, value: &'a T) {
         #[cfg(debug_assertions)]
         debug_assert!(self.contains(value));
-
         #[cfg(debug_assertions)]
         self.len.set(self.len.get() - 1);
+
+        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it must be
+        // replaced with a `take`.
         let prev = value.link().prev.take();
         let next = value.link().next.take();
         match prev {
@@ -135,7 +144,10 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
         #[cfg(debug_assertions)]
         value.link().linked_to.set((other as *const Self).addr());
 
-        let new_next = other.head.take();
+        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it must be
+        // replaced with a `take`.
+        let new_next = other.head.get();
+
         let last_prev = value.link().prev.take();
         let last_next = value.link().next.replace(new_next);
 
@@ -143,16 +155,15 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
             Some(prev) => prev.link().next.set(last_next),
             None => self.head.set(last_next),
         }
-
         match last_next {
             Some(next) => next.link().prev.set(last_prev),
             None => self.tail.set(last_prev),
         }
-
         match new_next {
             Some(next) => next.link().prev.set(Some(value)),
             None => other.tail.set(Some(value)),
         }
+
         other.head.set(Some(value));
     }
 

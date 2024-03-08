@@ -491,8 +491,11 @@ impl<'a> Shard<'a> {
     ///
     /// `true` if this shard is unused after the deallocation.
     pub(crate) fn push_block(&self, mut block: BlockRef<'a>) -> bool {
-        block.set_next(self.local_free.take());
-        self.local_free.set(Some(block));
+        // `Cell::take` + `Cell::get` generates more operations.
+        unsafe {
+            block.set_next(ptr::read(self.local_free.as_ptr()));
+            ptr::write(self.local_free.as_ptr(), Some(block));
+        }
         self.used.set(self.used.get() - 1);
         self.used.get() == 0
     }
