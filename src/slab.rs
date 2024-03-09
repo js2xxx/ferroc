@@ -98,7 +98,6 @@ pub(crate) enum SlabSource<B: BaseAlloc> {
 pub(crate) struct Slab<'a, B: BaseAlloc> {
     pub(super) source: SlabSource<B>,
     pub(super) thread_id: usize,
-    pub(super) is_large_or_huge: bool,
     pub(super) size: usize,
     used: Cell<usize>,
     abandoned: Cell<usize>,
@@ -158,13 +157,11 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
     /// `ptr` must be a pointer within the range of `this`.
     pub(crate) unsafe fn shard_meta(this: NonNull<Self>, ptr: NonNull<()>) -> NonNull<Shard<'a>> {
         let shards = ptr::addr_of!((*this.as_ptr()).shards);
-        let index = if !unsafe { ptr::addr_of!((*this.as_ptr()).is_large_or_huge).read() } {
-            (ptr.addr().get() - this.addr().get()) / SHARD_SIZE
-        } else {
-            Self::HEADER_COUNT
-        };
+        let index = (ptr.addr().get() - this.addr().get()) / SHARD_SIZE;
         let shard = shards.cast::<Shard<'a>>().add(index);
-        unsafe { NonNull::new_unchecked(shard.cast_mut()) }
+        let primary_offset = unsafe { (*ptr::addr_of!((*shard).primary_offset)).get() };
+        let primary_shard = unsafe { shard.byte_sub(primary_offset) };
+        unsafe { NonNull::new_unchecked(primary_shard.cast_mut()) }
     }
 
     /// # Safety
@@ -175,7 +172,6 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
         ptr: NonNull<[u8]>,
         thread_id: usize,
         source: SlabSource<B>,
-        is_large_or_huge: bool,
         free_is_zero: bool,
     ) -> SlabRef<'a, B> {
         let slab = ptr.cast::<Self>().as_ptr();
@@ -185,7 +181,6 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
 
         addr_of_mut!((*slab).thread_id).write(thread_id);
         addr_of_mut!((*slab).source).write(source);
-        addr_of_mut!((*slab).is_large_or_huge).write(is_large_or_huge);
         addr_of_mut!((*slab).size).write(ptr.len());
         addr_of_mut!((*slab).used).write(Cell::new(0));
         addr_of_mut!((*slab).abandoned).write(Cell::new(0));
@@ -199,8 +194,10 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
         let (first, rest) = shards[Self::HEADER_COUNT..]
             .split_first_mut()
             .unwrap_unchecked();
+
         first.write(Shard::new(
             ptr.cast::<Self>(),
+            Self::HEADER_COUNT,
             Self::HEADER_COUNT,
             SHARD_COUNT - Self::HEADER_COUNT,
             free_is_zero,
@@ -209,6 +206,7 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
             s.write(Shard::new(
                 ptr.cast::<Self>(),
                 index + Self::HEADER_COUNT + 1,
+                Self::HEADER_COUNT,
                 0,
                 free_is_zero,
             ));
@@ -272,6 +270,7 @@ pub(crate) static EMPTY_SHARD: EmptyShard = EmptyShard(Shard {
     header: ShardHeader::dangling(),
     link: CellLink::new(),
     shard_count: Cell::new(1),
+    primary_offset: Cell::new(0),
     is_committed: Cell::new(false),
     obj_size: AtomicUsize::new(0),
     cap_limit: Cell::new(0),
@@ -393,6 +392,7 @@ pub(crate) struct Shard<'a> {
 
     link: CellLink<'a, Self>,
     shard_count: Cell<usize>,
+    primary_offset: Cell<usize>,
     is_committed: Cell<bool>,
 
     pub(crate) obj_size: AtomicUsize,
@@ -419,6 +419,7 @@ impl<'a> Shard<'a> {
     pub(crate) unsafe fn new<B: BaseAlloc>(
         slab: NonNull<Slab<'a, B>>,
         index: usize,
+        start_index: usize,
         shard_count: usize,
         free_is_zero: bool,
     ) -> Self {
@@ -430,13 +431,10 @@ impl<'a> Shard<'a> {
                 marker: PhantomData,
             },
             shard_count: Cell::new(shard_count),
+            primary_offset: Cell::new((index - start_index) * mem::size_of::<Self>()),
             free_is_zero: Cell::new(free_is_zero),
             ..Default::default()
         }
-    }
-
-    pub(crate) fn shard_count(&self) -> usize {
-        self.shard_count.get()
     }
 
     pub(crate) fn is_unused(&self) -> bool {
@@ -780,6 +778,7 @@ impl<'a> Shard<'a> {
 
         let (slab, _) = unsafe { self.slab::<B>() };
         slab.used.set(slab.used.get() + 1);
+        debug_assert_eq!(self.primary_offset.get(), 0);
 
         self.obj_size.store(obj_size, Relaxed);
         let usable_size = SLAB_SIZE * slab_count.get() - SHARD_SIZE * Slab::<B>::HEADER_COUNT;
@@ -822,11 +821,14 @@ impl<'a> Shard<'a> {
 
         let (slab, index) = unsafe { self.slab::<B>() };
         slab.used.set(slab.used.get() + 1);
+        self.primary_offset.set(0);
         let shard_count = self.shard_count.replace(1) - 1;
         debug_assert!(shard_count + index < SHARD_COUNT);
-        let next_shard = (shard_count > 0)
-            .then(|| &slab.shards[index + 1])
-            .inspect(|next_shard| next_shard.shard_count.set(shard_count));
+        let next_shard = (shard_count > 0).then(|| &slab.shards[index + 1]);
+        let next_shard = next_shard.inspect(|next_shard| {
+            next_shard.primary_offset.set(0);
+            next_shard.shard_count.set(shard_count);
+        });
 
         let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
         let cap_limit = SHARD_SIZE / obj_size;

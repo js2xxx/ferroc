@@ -58,7 +58,6 @@ impl<'a> BlockRef<'a> {
         track::defined(self.0.cast(), Self::SLOT_SIZE);
         // SAFETY: this structure contains a valid `next` pointer.
         let next = unsafe { ptr.read() };
-        unsafe { ptr.write(None) };
         track::no_access(self.0.cast(), Self::SLOT_SIZE);
         next.map(|ptr| unsafe { Self::from_raw(ptr) })
     }

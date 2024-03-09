@@ -149,12 +149,11 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
         self: Pin<&Self>,
         count: NonZeroUsize,
         align: usize,
-        is_large_or_huge: bool,
         direct: bool,
     ) -> Result<&'arena Shard<'arena>, Error<B>> {
         let slab = self
             .arena
-            .allocate(self.thread_id(), count, align, is_large_or_huge, direct)?;
+            .allocate(self.thread_id(), count, align, direct)?;
         Ok(slab.into_shard())
     }
 
@@ -166,12 +165,9 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
             Ok(None) => {} // `slab` has abandoned shard(s), so we cannot reuse it.
             // `slab` is unused/abandoned, we can deallocate it.
             Err(slab) => {
-                if !slab.is_large_or_huge {
-                    let _count = self
-                        .free_shards
-                        .drain(|s| ptr::eq(unsafe { s.slab::<B>().0 }, &*slab))
-                        .fold(0, |a, s| a + s.shard_count());
-                }
+                self.free_shards
+                    .drain(|s| ptr::eq(unsafe { s.slab::<B>().0 }, &*slab));
+
                 // SAFETY: All slabs are allocated from `self.arena`.
                 unsafe { self.arena.deallocate(slab) }
             }
@@ -324,7 +320,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
         let count = (Slab::<B>::HEADER_COUNT * SHARD_SIZE + size).div_ceil(SLAB_SIZE);
         let count = NonZeroUsize::new(count).unwrap();
-        let shard = stry!(cx.alloc_slab(count, SHARD_SIZE, true, true));
+        let shard = stry!(cx.alloc_slab(count, SHARD_SIZE, true));
         let delayed_free = NonNull::from(&self.delayed_free);
         stry!(shard.init_large_or_huge(size, count, delayed_free, cx.arena.base()));
         self.huge_shards.push(shard);
@@ -352,15 +348,20 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         size: usize,
         zero: bool,
     ) -> Option<NonNull<()>> {
-        let block = shard.pop_block()?;
-        let ptr = block.into_raw();
+        let mut block = shard.pop_block()?;
+        let ptr = block.as_ptr();
 
         let ptr_slice = NonNull::from_raw_parts(ptr, size);
         track::allocate(ptr_slice, 0, zero);
 
-        if zero && !shard.free_is_zero() {
-            unsafe { ptr_slice.as_uninit_slice_mut().fill(MaybeUninit::zeroed()) };
+        if zero {
+            if shard.free_is_zero() {
+                block.set_next(None);
+            } else {
+                unsafe { ptr_slice.as_uninit_slice_mut().fill(MaybeUninit::zeroed()) };
+            }
         }
+        core::mem::forget(block);
         Some(ptr)
     }
 
@@ -440,11 +441,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         // we don't iterate and unfull it here. Keeping that list simply prevents full
         // shards being iterated everytime on the loop above.
 
-        // 3. Try to clear abandoned huge shards and allocate/reclaim a slab.
-
-        // SAFETY: The current function needs the heap to be initialized.
-        unsafe { self.collect_huge() };
-        let new = stry!(cx.alloc_slab(NonZeroUsize::MIN, 1, is_large, !first_try));
+        // 3. Try to allocate/reclaim a slab.
+        let new = stry!(cx.alloc_slab(NonZeroUsize::MIN, 1, !first_try));
         add_fresh!(new);
         Some(new)
     }
@@ -857,20 +855,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
     }
 
-    /// # Safety
-    ///
-    /// The heap must be initialized.
-    unsafe fn collect_huge(&self) {
-        let huge = self.huge_shards.drain(|shard| {
-            shard.collect(false);
-            shard.is_unused()
-        });
-        huge.for_each(|shard| {
-            let cx = unsafe { self.cx.unwrap_unchecked() };
-            cx.finalize_shard(shard)
-        });
-    }
-
     /// Clean up some garbage data immediately.
     ///
     /// In short, due to implementation details, the free list (i.e. the popper
@@ -891,9 +875,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         while !self.try_free_delayed(false) && force {
             hint::spin_loop();
         }
-
-        // SAFETY: `self` is initialized.
-        unsafe { self.collect_huge() };
 
         if force && let Some(cx) = self.cx {
             cx.arena.reclaim_all();

@@ -105,7 +105,10 @@ if(CMAKE_BUILD_TYPE MATCHES ".*Deb.*")
 endif()
 
 if(NOT FE_PGO_GATHER)
-    set(BUILD_FLAGS ${BUILD_FLAGS} -Zbuild-std=core,std,panic_abort -Zbuild-std-features=)
+    set(BUILD_FLAGS ${BUILD_FLAGS} 
+        -Zbuild-std=core,std,panic_abort 
+        -Zbuild-std-features=panic_immediate_abort,compiler-builtins-mem,compiler-builtins-weak-intrinsics
+    )
 endif()
 
 set(SRC_PROFDATA)
