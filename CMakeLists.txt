@@ -20,10 +20,10 @@ find_program(
     PATH_SUFFIXES bin
 )
 
-exec_program(
-    ${CARGO} ARGS +nightly --version
+execute_process(
+    COMMAND ${CARGO} +nightly --version
     OUTPUT_VARIABLE CARGO_OUTPUT
-    RETURN_VALUE CARGO_RESULT
+    RESULT_VARIABLE CARGO_RESULT
 )
 if (NOT CARGO_RESULT EQUAL 0)
     message(
@@ -115,8 +115,8 @@ set(SRC_PROFDATA)
 if(FE_PGO_USE)
     set(SRC_PROFDATA "/tmp/pgo/ferroc.profdata")
 
-    exec_program(
-        ${RUSTC} ARGS --print sysroot
+    execute_process(
+        COMMAND ${RUSTC} --print sysroot
         OUTPUT_VARIABLE RUSTC_SYSROOT
     )
     find_program(
