@@ -152,7 +152,7 @@ checksum = "25cbce373ec4653f1a01a31e8a5e5ec0c622dc27ff9c4e6606eefef5cbbed4a5"
 
 [[package]]
 name = "ferroc"
-version = "0.3.0"
+version = "1.0.0-pre.1"
 dependencies = [
  "array-macro",
  "cbindgen",
