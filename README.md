@@ -116,7 +116,7 @@ There are also some custom options (via `cmake -D`) you can enable:
 
 ## Benchmarks
 
-Using a subset of [`mimalloc-bench`](https://github.com/daanx/mimalloc-bench) for benchmarking. Running on my laptop with 16GB of RAM and an Intel i7-10750H CPU @ 2.60GHz. The process is repeated 10 times and the results are averaged and taken as logarithms.
+Using a subset of [`mimalloc-bench`](https://github.com/daanx/mimalloc-bench) for benchmarking. Running on my laptop with 16GB of RAM and an Intel i7-10750H CPU @ 2.60GHz. The process is repeated 10 times.
 
 Time consumed:
 
