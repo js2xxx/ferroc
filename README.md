@@ -120,13 +120,13 @@ Using a subset of [`mimalloc-bench`](https://github.com/daanx/mimalloc-bench) fo
 
 Time consumed:
 
-![Time consumed #1](./assets/time1.svg)
-![Time consumed #2](./assets/time2.svg)
+![Time consumed #1](./assets/time1.png)
+![Time consumed #2](./assets/time2.png)
 
 Memory consumed:
 
-![Memory consumed #1](./assets/memory1.svg)
-![Memory consumed #2](./assets/memory2.svg)
+![Memory consumed #1](./assets/memory1.png)
+![Memory consumed #2](./assets/memory2.png)
 
 ## Caveats
 
