@@ -111,6 +111,8 @@ There are also some custom options (via `cmake -D`) you can enable:
 
 - `FE_TRACK_VALGRIND`: See [`"track-valgrind"`](#cargo-features) above;
 - `FE_FINER_GRAINED`: See [`"finer-grained"`](#cargo-features) above.
+- `FE_PGO_GATHER`: Enable PGO (Profile-Guided Optimization) gathering.
+- `FE_PGO_USE`: Build with optimization from pre-gathered PGO data (which requires appending ` llvm-tools` to the second line of step 1).
 
 ## Benchmarks
 

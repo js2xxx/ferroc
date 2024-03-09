@@ -68,7 +68,7 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 set(BUILD_FLAGS)
 set(BUILD_SUBDIR debug)
-if(CMAKE_BUILD_TYPE MATCHES "Rel.*")
+if(CMAKE_BUILD_TYPE MATCHES ".*Rel.*")
     set(BUILD_FLAGS "--release")
     set(BUILD_SUBDIR release)
 endif()
@@ -85,14 +85,11 @@ if(FE_FINER_GRAINED)
 endif()
 
 set(CMAKE_CARGO_MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml)
-set(CMAKE_CARGO_LIBDIR ${CMAKE_BINARY_DIR}/${TRIPLE}/${BUILD_SUBDIR})
 
 file(GLOB_RECURSE SRC *.rs)
 set(STATIC_LIB_NAME ${CMAKE_STATIC_LIBRARY_PREFIX}ferroc${CMAKE_STATIC_LIBRARY_SUFFIX})
 set(SHARED_LIB_NAME ${CMAKE_SHARED_LIBRARY_PREFIX}ferroc${CMAKE_SHARED_LIBRARY_SUFFIX})
 
-set(STATIC_LIB_BIN ${CMAKE_CARGO_LIBDIR}/${STATIC_LIB_NAME})
-set(SHARED_LIB_BIN ${CMAKE_CARGO_LIBDIR}/${SHARED_LIB_NAME})
 set(STATIC_LIB ${CMAKE_BINARY_DIR}/${STATIC_LIB_NAME})
 set(SHARED_LIB ${CMAKE_BINARY_DIR}/${SHARED_LIB_NAME})
 set(HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/ferroc.h)
@@ -105,9 +102,13 @@ if(CMAKE_BUILD_TYPE MATCHES ".*Deb.*")
 endif()
 
 if(NOT FE_PGO_GATHER)
-    set(BUILD_FLAGS ${BUILD_FLAGS} 
-        -Zbuild-std=core,std,panic_abort 
-        -Zbuild-std-features=panic_immediate_abort,compiler-builtins-mem,compiler-builtins-weak-intrinsics
+    set(BUILD_STD_FEATURES compiler-builtins-mem,compiler-builtins-weak-intrinsics)
+    if(CMAKE_BUILD_TYPE MATCHES ".*Rel.*")
+        set(BUILD_STD_FEATURES ${BUILD_STD_FEATURES},panic_immediate_abort)
+    endif()
+    set(BUILD_FLAGS ${BUILD_FLAGS}
+        -Zbuild-std=core,std,panic_abort
+        -Zbuild-std-features=${BUILD_STD_FEATURES}
     )
 endif()
 
@@ -151,15 +152,15 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND}
         -E env RUSTFLAGS=${RUSTFLAGS}
         ${CARGO} +nightly build ${BUILD_FLAGS} --features c-override --target ${TRIPLE}
-        --manifest-path ${CMAKE_CARGO_MANIFEST} --target-dir ${CMAKE_BINARY_DIR}
+            --manifest-path ${CMAKE_CARGO_MANIFEST} --target-dir ${CMAKE_BINARY_DIR}
+            --out-dir ${CMAKE_BINARY_DIR} -Zunstable-options
     DEPENDS ${SRC} ${SRC_PROFDATA}
     COMMENT "Building static & shared libraries of ferroc"
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 add_custom_target(
-    ferroc-build ALL COMMAND ${CMAKE_COMMAND} -E copy
-        ${STATIC_LIB_BIN} ${SHARED_LIB_BIN} ${CMAKE_BINARY_DIR}
+    ferroc-build ALL
     DEPENDS ${STATIC_LIB} ${SHARED_LIB}
     COMMENT "Copying libraries to root target directory"
 )
