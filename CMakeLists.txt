@@ -99,7 +99,7 @@ set(HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/ferroc.h)
 message(STATUS "Building static library: ${STATIC_LIB}")
 message(STATUS "Building shared library: ${SHARED_LIB}")
 
-set(RUSTFLAGS "--cfg sys_alloc -Ztls-model=initial-exec -Cpanic=abort")
+set(RUSTFLAGS "-Ztls-model=initial-exec -Cpanic=abort")
 if(CMAKE_BUILD_TYPE MATCHES ".*Deb.*")
     set(RUSTFLAGS "${RUSTFLAGS} -Cdebuginfo=2")
 endif()
@@ -150,7 +150,7 @@ add_custom_command(
     BYPRODUCTS ${HEADERS}
     COMMAND ${CMAKE_COMMAND}
         -E env RUSTFLAGS=${RUSTFLAGS}
-        ${CARGO} +nightly build ${BUILD_FLAGS} --features c --target ${TRIPLE}
+        ${CARGO} +nightly build ${BUILD_FLAGS} --features c-override --target ${TRIPLE}
         --manifest-path ${CMAKE_CARGO_MANIFEST} --target-dir ${CMAKE_BINARY_DIR}
     DEPENDS ${SRC} ${SRC_PROFDATA}
     COMMENT "Building static & shared libraries of ferroc"
