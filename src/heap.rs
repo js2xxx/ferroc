@@ -365,8 +365,11 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         Some(ptr)
     }
 
+    /// # Safety
+    ///
+    /// `fallback` must return an initialized heap.
     #[inline]
-    fn pop<'a>(
+    unsafe fn pop<'a>(
         &'a self,
         size: usize,
         zero: bool,
@@ -382,6 +385,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
 
         let heap = if self.is_init() { self } else { fallback() };
+        debug_assert!(heap.is_init());
         // SAFETY: Heap is initialized.
         unsafe { heap.pop_contended(size, zero) }
     }
@@ -493,7 +497,10 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         Some(unsafe { self.allocate_in_shard(shard, size, zero).unwrap_unchecked() })
     }
 
-    fn pop_aligned<'a>(
+    /// # Safety
+    ///
+    /// `fallback` must return an initialized heap.
+    unsafe fn pop_aligned<'a>(
         &'a self,
         layout: Layout,
         zero: bool,
@@ -518,8 +525,11 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         self.pop_aligned_contended(layout, zero, fallback)
     }
 
+    /// # Safety
+    ///
+    /// `fallback` must return an initialized heap.
     #[cold]
-    fn pop_aligned_contended<'a>(
+    unsafe fn pop_aligned_contended<'a>(
         &'a self,
         layout: Layout,
         zero: bool,
@@ -547,7 +557,10 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
     }
 
-    fn allocate_inner<'a>(
+    /// # Safety
+    ///
+    /// `fallback` must return an initialized heap.
+    unsafe fn allocate_inner<'a>(
         &'a self,
         layout: Layout,
         zero: bool,
@@ -588,13 +601,13 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     where
         F: FnOnce() -> &'a Self,
     {
-        let fallback = options.fallback;
-        self.allocate_inner(layout, zero, fallback)
-            .ok_or(AllocError)
+        // SAFETY: `fallback` returns an initialized heap, according to the
+        // functionality of `options`.
+        unsafe { self.allocate_inner(layout, zero, options.fallback) }.ok_or(AllocError)
     }
 
     #[cfg(feature = "c")]
-    pub(crate) fn malloc<'a>(
+    pub(crate) unsafe fn malloc<'a>(
         &'a self,
         size: usize,
         zero: bool,
@@ -924,7 +937,12 @@ pub struct AllocateOptions<F> {
 
 impl<F> AllocateOptions<F> {
     /// Creates a new allocate options.
-    pub const fn new(fallback: F) -> Self {
+    ///
+    /// # Safety
+    ///
+    /// `fallback` must return a reference to an already initialized heap,
+    /// otherwise Undefined Behavior will be raised.
+    pub const unsafe fn new(fallback: F) -> Self {
         AllocateOptions { fallback }
     }
 
@@ -932,7 +950,12 @@ impl<F> AllocateOptions<F> {
     ///
     /// The fallback returns lazyily evaluated backup heap when the current heap
     /// is not initialized (fails to acquire memory from its context).
-    pub fn fallback<F2>(self, fallback: F2) -> AllocateOptions<F2> {
+    ///
+    /// # Safety
+    ///
+    /// `fallback` must return a reference to an already initialized heap,
+    /// otherwise Undefined Behavior will be raised.
+    pub unsafe fn fallback<F2>(self, fallback: F2) -> AllocateOptions<F2> {
         AllocateOptions { fallback }
     }
 }
