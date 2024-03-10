@@ -42,12 +42,16 @@ fn do_bench<A: Allocator + Send + Sync>(a: &A) -> Duration {
         .collect();
     let start = Instant::now();
     for _i in 0..ITER {
-        thread::scope(|s| {
-            let transfer = &transfer;
-            for tid in 0..THREADS {
-                s.spawn(move || bench_one(tid, transfer, a));
-            }
-        });
+        if THREADS == 1 {
+            bench_one(0, &transfer, a);
+        } else {
+            thread::scope(|s| {
+                let transfer = &transfer;
+                for tid in 0..THREADS {
+                    s.spawn(move || bench_one(tid, transfer, a));
+                }
+            });
+        }
         (transfer.iter_mut().filter(|_| probably(50))).for_each(|t| *t.get_mut().unwrap() = None)
     }
     drop(transfer);
@@ -117,7 +121,7 @@ impl<A: Allocator> Drop for Items<A> {
                 value ^ COOKIE,
                 (self.0.len() - index),
                 "memory corruption at block {:p} at {index}",
-                self.0
+                self.0.as_ptr()
             )
         }
     }
