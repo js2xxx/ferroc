@@ -654,10 +654,6 @@ impl<'a> Shard<'a> {
         }
     }
 
-    fn mark_never_delayed(&self) {
-        self.set_delayed_tag(NEVER, usize::MAX);
-    }
-
     fn collect_thread_free(&self) {
         let mut ptr = self.thread_free.get().load(Relaxed);
         let mut thread_free = loop {
@@ -861,7 +857,7 @@ impl<'a> Shard<'a> {
     pub(crate) fn fini<B: BaseAlloc + 'a>(&self) -> Result<Option<&Self>, SlabRef<B>> {
         #[cfg(debug_assertions)]
         debug_assert!(!self.link.is_linked());
-        self.mark_never_delayed();
+        self.set_delayed_tag(NEVER, usize::MAX);
         self.delayed_free.store(ptr::null_mut(), Release);
 
         let (slab, _) = unsafe { self.slab::<B>() };

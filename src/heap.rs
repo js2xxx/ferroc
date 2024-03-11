@@ -67,7 +67,7 @@ pub const fn obj_size_index(size: usize) -> usize {
 pub const fn obj_size(index: usize) -> usize {
     (match index {
         0..=7 => index,
-        i => (8 + ((i - 8) & 7)) << ((i - 8) >> 3),
+        i => (8 + (i & 7)) << ((i - 8) >> 3),
     }) << GRANULARITY_SHIFT
 }
 
@@ -314,6 +314,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 }
 
 impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
+    #[cold]
     unsafe fn pop_huge(&self, size: usize, zero: bool) -> Option<NonNull<()>> {
         // SAFETY: The heap is initialized.
         let cx = unsafe { self.cx.unwrap_unchecked() };
@@ -736,19 +737,27 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let delayed_free = self.delayed_free.get();
 
         let mut ptr = delayed_free.load(Relaxed);
-        let mut block_slot = loop {
+        loop {
             let Some(block) = NonNull::new(ptr) else {
-                return true;
+                break true;
             };
             match delayed_free.compare_exchange_weak(ptr, ptr::null_mut(), AcqRel, Acquire) {
-                Ok(_) => break Some(unsafe { BlockRef::from_raw(block) }),
+                Ok(_) => {
+                    let block = unsafe { BlockRef::from_raw(block) };
+                    break self.free_delayed_contended(block, no_more);
+                }
                 Err(b) => ptr = b,
             }
-        };
+        }
+    }
+
+    #[cold]
+    fn free_delayed_contended(&self, mut block: BlockRef<'arena>, no_more: bool) -> bool {
+        let delayed_free = self.delayed_free.get();
 
         let mut cleared = true;
-        while let Some(mut block) = block_slot {
-            block_slot = block.take_next();
+        loop {
+            let next = block.take_next();
 
             let ptr = block.as_ptr();
             // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
@@ -772,6 +781,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 }
                 cleared = false;
             }
+
+            block = if let Some(block) = next { block } else { break }
         }
         cleared
     }
