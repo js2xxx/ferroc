@@ -14,6 +14,7 @@ impl Mmap {
         Mmap
     }
 
+    /// Returns the memory page size of the current platform.
     pub fn page_size(&self) -> usize {
         unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
     }

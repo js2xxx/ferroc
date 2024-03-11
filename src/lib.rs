@@ -128,6 +128,7 @@
 //! If you want to replace the default `malloc` implementation, the `c-override`
 //! feature can be enabled.
 #![no_std]
+#![warn(missing_docs)]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
 #![feature(const_pin)]
