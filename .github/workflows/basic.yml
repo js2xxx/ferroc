@@ -37,8 +37,9 @@ jobs:
       - name: Build default
         run: cargo build --release --verbose
 
-      - name: Run default examples
+      - name: Run default tests
         run: |
+          cargo test
           cargo run --release --example random
           cargo run --release --example stress
           cargo run --release --example random2
@@ -79,6 +80,10 @@ jobs:
   miri:
     name: Miri
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        miri-flags: ["", "-Zmiri-tree-borrows"]
 
     steps:
       - uses: actions/checkout@v4
@@ -97,4 +102,4 @@ jobs:
           cargo miri run --example stress
           cargo miri run --example random2
         env:
-          MIRIFLAGS: -Zmiri-disable-stacked-borrows
+          MIRIFLAGS: ${{ matrix.miri-flags }}

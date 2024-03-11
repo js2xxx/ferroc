@@ -26,7 +26,7 @@ const TRANSFER_COUNT: usize = 1000;
 #[cfg(any(miri, debug_assertions))]
 const TRANSFER_COUNT: usize = 20;
 
-#[cfg(feature = "track-valgrind")]
+#[cfg(not(miri))]
 #[global_allocator]
 static FERROC: Ferroc = Ferroc;
 
@@ -92,7 +92,7 @@ fn probably(p: u8) -> bool {
     fastrand::u8(0..=100) <= p
 }
 
-struct Items<A: Allocator>(Box<[usize], A>);
+struct Items<A: Allocator>(Vec<usize, A>);
 
 impl<A: Allocator> Items<A> {
     fn new(count: usize, a: A) -> Self {
@@ -110,7 +110,7 @@ impl<A: Allocator> Items<A> {
 
         let mut vec = Vec::new_in(a);
         vec.extend((0..count).map(|i| (count - i) ^ COOKIE));
-        Items(vec.into_boxed_slice())
+        Items(vec)
     }
 }
 

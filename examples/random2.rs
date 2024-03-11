@@ -24,6 +24,7 @@ const THREADS: usize = 12;
 const THREADS: usize = 2;
 const SLEEP: Duration = Duration::from_secs(5);
 
+#[cfg(not(miri))]
 #[global_allocator]
 static FERROC: Ferroc = Ferroc;
 
