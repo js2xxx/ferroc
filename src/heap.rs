@@ -55,8 +55,11 @@ pub const fn obj_size_index(size: usize) -> usize {
     match (size + GRANULARITY - 1) >> GRANULARITY_SHIFT {
         index @ 0..=7 => index,
         ssize => {
+            debug_assert!(ssize > 0);
+            // SAFETY: ssize > 0 according to the previous branch.
+            let ssize = unsafe { NonZeroUsize::new_unchecked(ssize) };
             let sft = usize::BITS - ssize.leading_zeros() - 4;
-            ((ssize - 1) >> sft) + (sft << 3) as usize + 1
+            ((ssize.get() - 1) >> sft) + (sft << 3) as usize + 1
         }
     }
 }
@@ -334,9 +337,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         stry!(shard.init_large_or_huge(size, count, delayed_free, cx.arena.base()));
         self.huge_shards.push(shard);
 
-        debug_assert!(shard.has_free());
         // SAFETY: `shard` has free blocks.
-        Some(unsafe { self.allocate_in_shard(shard, size, zero).unwrap_unchecked() })
+        let block = unsafe { shard.pop_block_unchecked() };
+        Some(Self::post_alloc(block, size, zero, shard))
     }
 
     fn update_direct(&self, bin: &Bin<'arena>) {
@@ -351,13 +354,12 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         slice.iter().for_each(|d| d.set(shard));
     }
 
-    fn allocate_in_shard(
-        &self,
-        shard: &Shard<'arena>,
+    fn post_alloc(
+        mut block: BlockRef<'arena>,
         size: usize,
         zero: bool,
-    ) -> Option<NonNull<()>> {
-        let mut block = shard.pop_block()?;
+        shard: &Shard<'arena>,
+    ) -> NonNull<()> {
         let ptr = block.as_ptr();
 
         let ptr_slice = NonNull::from_raw_parts(ptr, size);
@@ -371,7 +373,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             }
         }
         core::mem::forget(block);
-        Some(ptr)
+        ptr
     }
 
     /// # Safety
@@ -388,9 +390,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             && let direct_index = direct_index(size)
             // SAFETY: `direct_shards` only contains sizes that <= `SMALL_MAX`.
             && let shard = unsafe { self.direct_shards.get_unchecked(direct_index) }.get()
-            && let Some(ptr) = self.allocate_in_shard(shard, size, zero)
+            && let Some(block) = shard.pop_block()
         {
-            return Some(ptr);
+            return Some(Self::post_alloc(block, size, zero, shard));
         }
 
         let heap = if self.is_init() { self } else { fallback() };
@@ -406,7 +408,6 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     unsafe fn find_free_from_all(
         &self,
         bin: &Bin<'arena>,
-        is_large: bool,
         first_try: bool,
     ) -> Option<&Shard<'arena>> {
         let mut cursor = bin.list.cursor_head();
@@ -444,7 +445,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
 
         // 1. Try to pop from the free shards;
-        if !is_large && let Some(free) = cx.free_shards.pop() {
+        if bin.obj_size <= ObjSizeType::MEDIUM_MAX
+            && let Some(free) = cx.free_shards.pop()
+        {
             add_fresh!(free);
             return Some(free);
         }
@@ -463,19 +466,14 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// # Safety
     ///
     /// `cx` must be initialized.
-    unsafe fn find_free(
-        &self,
-        bin: &Bin<'arena>,
-        is_large: bool,
-        first_try: bool,
-    ) -> Option<&Shard<'arena>> {
+    unsafe fn find_free(&self, bin: &Bin<'arena>, first_try: bool) -> Option<&Shard<'arena>> {
         if let Some(shard) = bin.list.current()
             && shard.collect(false)
         {
             return Some(shard);
         }
 
-        self.find_free_from_all(bin, is_large, first_try)
+        self.find_free_from_all(bin, first_try)
     }
 
     /// # Safety
@@ -490,20 +488,19 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
 
         let index = obj_size_index(size);
-        let is_large = size > ObjSizeType::MEDIUM_MAX;
         debug_assert!(index < OBJ_SIZE_COUNT);
         let bin = unsafe { self.shards.get_unchecked(index) };
 
-        let shard = if let Some(shard) = self.find_free(bin, is_large, true) {
+        let shard = if let Some(shard) = self.find_free(bin, true) {
             shard
         } else {
             self.collect(true);
-            self.find_free(bin, is_large, false)?
+            self.find_free(bin, false)?
         };
 
-        debug_assert!(shard.has_free());
         // SAFETY: `shard` has free blocks.
-        Some(unsafe { self.allocate_in_shard(shard, size, zero).unwrap_unchecked() })
+        let block = unsafe { shard.pop_block_unchecked() };
+        Some(Self::post_alloc(block, size, zero, shard))
     }
 
     /// # Safety
@@ -521,14 +518,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             && let shard = unsafe { self.direct_shards.get_unchecked(direct_index) }.get()
             && let Some(block) = shard.pop_block_aligned(layout.align())
         {
-            let ptr = block.into_raw();
-            let ptr_slice = NonNull::from_raw_parts(ptr, layout.size());
-            track::allocate(ptr_slice, 0, zero);
-
-            if zero && !shard.free_is_zero() {
-                unsafe { ptr_slice.as_uninit_slice_mut().fill(MaybeUninit::zeroed()) };
-            }
-            return Some(ptr);
+            return Some(Self::post_alloc(block, layout.size(), zero, shard));
         }
 
         self.pop_aligned_contended(layout, zero, fallback)

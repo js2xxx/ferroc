@@ -449,6 +449,24 @@ impl<'a> Shard<'a> {
         unsafe { (*ptr::addr_of!((*this.as_ptr()).obj_size)).load(Relaxed) }
     }
 
+    /// # Safety
+    ///
+    /// This shard must have blocks in `free`.
+    pub(crate) unsafe fn pop_block_unchecked(&self) -> BlockRef<'a> {
+        debug_assert!(self.has_free());
+        // `Cell::take` should not be used due to its unconditional write to the storage
+        // place with `None`, which causes an undefined behavior of racy read-write on
+        // `EMPTY_SHARD`.
+        //
+        // SAFETY: reading `None` means nothing to drop, and we cansafely branch out...
+        let mut block = unsafe { ptr::read(self.free.as_ptr()).unwrap_unchecked() };
+        // SAFETY: ... while reading `Some` means we have pracically moved out the
+        // ownership of this block, so we overwrite the slot with `block.take_next()`.
+        unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
+        self.used.set(self.used.get() + 1);
+        block
+    }
+
     pub(crate) fn pop_block(&self) -> Option<BlockRef<'a>> {
         // `Cell::take` should not be used due to its unconditional write to the storage
         // place with `None`, which causes an undefined behavior of racy read-write on
@@ -498,6 +516,15 @@ impl<'a> Shard<'a> {
     }
 
     pub(crate) fn collect(&self, force: bool) -> bool {
+        // `is_null()` is equivalent to `cur_tag == VACANT && cur_ptr.is_none()`.
+        //
+        // If the current tag is VACANT, any deallocations will be freeing on the
+        // heapwise delayed free list instead of this thread free list, which means
+        // exactly `cur_ptr.is_none()`.
+        //
+        // Changing it to `Self::decompose_mt` will add instructions to hot paths while
+        // the actual check will be performed in `collect_thread_free` unconditionally,
+        // which means little benefit. Thus, the decomposition should not be done here.
         if force || !self.thread_free.get().load(Relaxed).is_null() {
             self.collect_thread_free();
         }
@@ -651,26 +678,28 @@ impl<'a> Shard<'a> {
 
     fn collect_thread_free(&self) {
         let mut ptr = self.thread_free.get().load(Relaxed);
-        let mut thread_free = loop {
+        loop {
             let (cur_ptr, cur_tag) = Self::decompose_mt(ptr);
-            match cur_ptr {
-                None => return,
-                Some(nn) => match self.thread_free.get().compare_exchange_weak(
-                    ptr,
-                    Self::compose_mt(None, cur_tag),
-                    AcqRel,
-                    Acquire,
-                ) {
-                    // SAFETY: Every pointer residing in `thread_free` points to a valid block.
-                    Ok(_) => break unsafe { BlockRef::from_raw(nn) },
-                    Err(e) => ptr = e,
-                },
-            }
-        };
+            let Some(nn) = cur_ptr else { break };
 
-        let count = thread_free.set_tail(self.local_free.take());
-        self.local_free.set(Some(thread_free));
-        self.used.set(self.used.get() - count);
+            match self.thread_free.get().compare_exchange_weak(
+                ptr,
+                Self::compose_mt(None, cur_tag),
+                AcqRel,
+                Acquire,
+            ) {
+                Ok(_) => {
+                    // SAFETY: Every pointer residing in `thread_free` points to a valid block.
+                    let mut thread_free = unsafe { BlockRef::from_raw(nn) };
+
+                    let count = thread_free.set_tail(self.local_free.take());
+                    self.local_free.set(Some(thread_free));
+                    self.used.set(self.used.get() - count);
+                    break;
+                }
+                Err(e) => ptr = e,
+            }
+        }
     }
 }
 
