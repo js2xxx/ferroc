@@ -494,7 +494,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let shard = if let Some(shard) = self.find_free(bin, true) {
             shard
         } else {
-            self.collect(true);
+            self.collect_cold();
             self.find_free(bin, false)?
         };
 
@@ -889,6 +889,15 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         if !self.is_init() {
             return;
         }
+        self.collect_inner(force);
+    }
+
+    #[cold]
+    fn collect_cold(&self) {
+        self.collect_inner(true);
+    }
+
+    fn collect_inner(&self, force: bool) {
         let shards = self.shards.iter().flat_map(|bin| &bin.list);
         shards.for_each(|shard| {
             shard.collect(force);

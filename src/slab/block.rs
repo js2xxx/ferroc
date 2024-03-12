@@ -62,7 +62,7 @@ impl<'a> BlockRef<'a> {
         next.map(|ptr| unsafe { Self::from_raw(ptr) })
     }
 
-    pub fn set_tail(&mut self, data: Option<Self>) -> usize {
+    pub fn set_tail(&mut self, data: Option<Self>) -> u32 {
         let mut count = 1;
         let mut ptr = self.0.cast();
         loop {
