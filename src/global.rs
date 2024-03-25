@@ -14,7 +14,7 @@ macro_rules! config_c {
 
         #[inline]
         pub(crate) unsafe fn free(&self, ptr: core::ptr::NonNull<u8>) {
-            thread::with(|heap| heap.free(ptr))
+            thread::with(|heap| unsafe { heap.free(ptr) })
         }
     };
 }
@@ -163,7 +163,8 @@ macro_rules! config_inner {
             /// - The allocation size must not be 0.
             #[inline]
             $vis unsafe fn layout_of(&self, ptr: core::ptr::NonNull<u8>) -> core::alloc::Layout {
-                thread::with(|heap| heap.layout_of(ptr))
+                // SAFETY: The safety requirements are the same.
+                thread::with(|heap| unsafe { heap.layout_of(ptr) })
             }
 
             /// Deallocates an allocation previously allocated by an instance of this
@@ -176,7 +177,8 @@ macro_rules! config_inner {
             /// See [`core::alloc::Allocator::deallocate`] for more information.
             #[inline]
             $vis unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
-                thread::with(|heap| heap.deallocate(ptr, layout))
+                // SAFETY: The safety requirements are the same.
+                thread::with(|heap| unsafe{ heap.deallocate(ptr, layout) })
             }
 
             $crate::config_c!($vis);
@@ -213,7 +215,8 @@ macro_rules! config_inner {
                 ptr: core::ptr::NonNull<u8>,
                 layout: core::alloc::Layout)
             {
-                self.deallocate(ptr, layout)
+                // SAFETY: The safety requirements are the same.
+                unsafe { self.deallocate(ptr, layout) }
             }
         }
 
@@ -221,7 +224,8 @@ macro_rules! config_inner {
             #[inline]
             unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
                 thread::with_lazy(|heap, fallback|
-                    heap.allocate_with(layout, false, Heap::options().fallback(fallback))
+                    // SAFETY: The provided fallback is valid.
+                    heap.allocate_with(layout, false, unsafe { Heap::options().fallback(fallback) })
                         .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
                 )
             }
@@ -229,7 +233,8 @@ macro_rules! config_inner {
             #[inline]
             unsafe fn alloc_zeroed(&self, layout: core::alloc::Layout) -> *mut u8 {
                 thread::with_lazy(|heap, fallback|
-                    heap.allocate_with(layout, true, Heap::options().fallback(fallback))
+                    // SAFETY: The provided fallback is valid.
+                    heap.allocate_with(layout, true, unsafe { Heap::options().fallback(fallback) })
                         .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
                 )
             }
@@ -237,7 +242,8 @@ macro_rules! config_inner {
             #[inline]
             unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
                 if let Some(ptr) = core::ptr::NonNull::new(ptr) {
-                    self.deallocate(ptr, layout)
+                    // SAFETY: The safety requirements are the same.
+                    unsafe { self.deallocate(ptr, layout) }
                 }
             }
         }

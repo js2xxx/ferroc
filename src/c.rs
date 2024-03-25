@@ -26,7 +26,7 @@ pub unsafe extern "C" fn fe_posix_memalign(
         return libc::EINVAL;
     }
     if let Ok(ptr) = Allocator::allocate(&Ferroc, layout) {
-        slot.write(ptr.as_ptr().cast());
+        unsafe { slot.write(ptr.as_ptr().cast()) };
         return 0;
     }
     libc::ENOMEM
@@ -63,7 +63,7 @@ pub extern "C" fn fe_pvalloc(size: usize) -> *mut c_void {
 #[no_mangle]
 pub unsafe extern "C" fn fe_malloc_size(ptr: *mut c_void) -> usize {
     match NonNull::new(ptr) {
-        Some(ptr) => Ferroc.layout_of(ptr.cast()).size(),
+        Some(ptr) => unsafe { Ferroc.layout_of(ptr.cast()).size() },
         None => 0,
     }
 }
@@ -91,10 +91,10 @@ pub unsafe extern "C" fn fe_realloc(ptr: *mut c_void, new_size: usize) -> *mut c
         return fe_malloc(new_size);
     };
     if new_size == 0 {
-        fe_free(ptr.as_ptr().cast());
+        unsafe { fe_free(ptr.as_ptr().cast()) };
         return fe_malloc(new_size);
     }
-    let layout = Ferroc.layout_of(ptr.cast());
+    let layout = unsafe { Ferroc.layout_of(ptr.cast()) };
     let old_size = layout.size();
     if (old_size / 2..old_size).contains(&new_size) {
         return ptr.as_ptr();
@@ -103,33 +103,37 @@ pub unsafe extern "C" fn fe_realloc(ptr: *mut c_void, new_size: usize) -> *mut c
     let new = fe_malloc(new_size);
     if !new.is_null() {
         let copied = old_size.min(new_size);
-        new.copy_from_nonoverlapping(ptr.as_ptr(), copied);
+        unsafe { new.copy_from_nonoverlapping(ptr.as_ptr(), copied) };
         if let Some(zeroed) = new_size.checked_sub(old_size) {
-            new.add(copied).write_bytes(0, zeroed);
+            unsafe { new.add(copied).write_bytes(0, zeroed) };
         }
-        fe_free(ptr.as_ptr().cast());
+        unsafe { fe_free(ptr.as_ptr().cast()) };
     }
     new
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fe_strdup(s: *const c_char) -> *mut c_char {
-    let len = libc::strlen(s);
+    let len = unsafe { libc::strlen(s) };
     let ptr = fe_malloc(len + 1).cast::<c_char>();
     if !ptr.is_null() {
-        ptr.copy_from_nonoverlapping(s, len);
-        ptr.add(len).write(0);
+        unsafe {
+            ptr.copy_from_nonoverlapping(s, len);
+            ptr.add(len).write(0);
+        }
     }
     ptr
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fe_strndup(s: *const c_char, n: usize) -> *mut c_char {
-    let len = libc::strnlen(s, n);
+    let len = unsafe { libc::strnlen(s, n) };
     let ptr = fe_malloc(len + 1).cast::<c_char>();
     if !ptr.is_null() {
-        ptr.copy_from_nonoverlapping(s, len);
-        ptr.add(len).write(0);
+        unsafe {
+            ptr.copy_from_nonoverlapping(s, len);
+            ptr.add(len).write(0);
+        }
     }
     ptr
 }
@@ -137,14 +141,14 @@ pub unsafe extern "C" fn fe_strndup(s: *const c_char, n: usize) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn fe_realpath(name: *const c_char, resolved: *mut c_char) -> *mut c_char {
     if !resolved.is_null() {
-        return libc::realpath(name, resolved);
+        return unsafe { libc::realpath(name, resolved) };
     }
-    let r = libc::realpath(name, ptr::null_mut());
+    let r = unsafe { libc::realpath(name, ptr::null_mut()) };
     if r.is_null() {
         return ptr::null_mut();
     }
-    let dupped = fe_strdup(r);
-    libc::free(r as *mut c_void);
+    let dupped = unsafe { fe_strdup(r) };
+    unsafe { libc::free(r as *mut c_void) };
     dupped
 }
 

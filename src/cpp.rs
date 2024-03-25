@@ -26,7 +26,7 @@ unsafe fn new_handler(nothrow: bool) -> bool {
     let Some(f) = get_new_handler() else {
         return if nothrow { false } else { unreachable!() };
     };
-    f();
+    unsafe { f() };
     true
 }
 
@@ -35,7 +35,7 @@ unsafe fn try_new(size: usize, nothrow: bool) -> *mut c_void {
         if let Some(p) = Ferroc.malloc(size, false) {
             break p.as_ptr().cast();
         }
-        if !new_handler(nothrow) {
+        if !unsafe { new_handler(nothrow) } {
             break ptr::null_mut();
         }
     }
@@ -46,7 +46,7 @@ unsafe fn try_allocate(layout: Layout, nothrow: bool) -> *mut c_void {
         if let Ok(p) = Allocator::allocate(&Ferroc, layout) {
             break p.as_ptr().cast();
         }
-        if !new_handler(nothrow) {
+        if !unsafe { new_handler(nothrow) } {
             break ptr::null_mut();
         }
     }
@@ -56,7 +56,7 @@ unsafe fn try_allocate(layout: Layout, nothrow: bool) -> *mut c_void {
 pub unsafe extern "C" fn fe_new(size: usize) -> *mut c_void {
     match Ferroc.malloc(size, false) {
         Some(ptr) => ptr.as_ptr().cast(),
-        None => try_new(size, false),
+        None => unsafe { try_new(size, false) },
     }
 }
 
@@ -64,31 +64,31 @@ pub unsafe extern "C" fn fe_new(size: usize) -> *mut c_void {
 pub unsafe extern "C" fn fe_new_nothrow(size: usize, _: NoThrow) -> *mut c_void {
     match Ferroc.malloc(size, false) {
         Some(ptr) => ptr.as_ptr().cast(),
-        None => try_new(size, true),
+        None => unsafe { try_new(size, true) },
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fe_alloc(size: usize, align: usize) -> *mut c_void {
     let Ok(layout) = Layout::from_size_align(size, align) else {
-        new_handler(false);
+        unsafe { new_handler(false) };
         return ptr::null_mut();
     };
     match Allocator::allocate(&Ferroc, layout) {
         Ok(ptr) => ptr.as_ptr().cast(),
-        Err(_) => try_allocate(layout, false),
+        Err(_) => unsafe { try_allocate(layout, false) },
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn fe_alloc_nothrow(size: usize, align: usize, _: NoThrow) -> *mut c_void {
     let Ok(layout) = Layout::from_size_align(size, align) else {
-        new_handler(true);
+        unsafe { new_handler(true) };
         return ptr::null_mut();
     };
     match Allocator::allocate(&Ferroc, layout) {
         Ok(ptr) => ptr.as_ptr().cast(),
-        Err(_) => try_allocate(layout, true),
+        Err(_) => unsafe { try_allocate(layout, true) },
     }
 }
 
@@ -97,7 +97,7 @@ pub unsafe extern "C" fn fe_free_sized(p: *mut c_void, size: usize) {
     if let Some(ptr) = NonNull::new(p)
         && let Ok(layout) = Layout::from_size_align(size, 1)
     {
-        Ferroc.deallocate(ptr.cast(), layout)
+        unsafe { Ferroc.deallocate(ptr.cast(), layout) }
     }
 }
 
@@ -106,7 +106,7 @@ pub unsafe extern "C" fn fe_free_aligned(p: *mut c_void, align: usize) {
     if let Some(ptr) = NonNull::new(p)
         && let Ok(layout) = Layout::from_size_align(1, align)
     {
-        Ferroc.deallocate(ptr.cast(), layout)
+        unsafe { Ferroc.deallocate(ptr.cast(), layout) }
     }
 }
 
@@ -115,7 +115,7 @@ pub unsafe extern "C" fn fe_dealloc(p: *mut c_void, size: usize, align: usize) {
     if let Some(ptr) = NonNull::new(p)
         && let Ok(layout) = Layout::from_size_align(size, align)
     {
-        Ferroc.deallocate(ptr.cast(), layout)
+        unsafe { Ferroc.deallocate(ptr.cast(), layout) }
     }
 }
 
