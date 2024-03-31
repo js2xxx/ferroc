@@ -140,7 +140,7 @@
 #![feature(isqrt)]
 #![feature(let_chains)]
 #![feature(non_null_convenience)]
-#![feature(pointer_is_aligned)]
+#![feature(pointer_is_aligned_to)]
 #![feature(ptr_as_uninit)]
 #![feature(ptr_mask)]
 #![feature(ptr_metadata)]
