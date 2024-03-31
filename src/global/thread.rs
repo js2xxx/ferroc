@@ -8,7 +8,7 @@ pub use libc::{pthread_key_create, pthread_key_delete, pthread_setspecific};
 #[allow_internal_unstable(thread_local)]
 macro_rules! thread_statics {
     () => {
-        use core::{cell::Cell, num::NonZeroU64, pin::Pin, ptr};
+        use core::{cell::Cell, pin::Pin, ptr};
 
         use super::{Heap, THREAD_LOCALS};
 
@@ -23,7 +23,7 @@ macro_rules! thread_statics {
         #[inline(always)]
         pub fn with_lazy<T, F>(f: F) -> T
         where
-            F: for<'a> FnOnce(&'a Heap<'static, 'static>, fn() -> &'a Heap<'static, 'static>) -> T,
+            F: for<'a, 'h> FnOnce(&'a Heap<'h, 'h>, fn() -> &'a Heap<'h, 'h>) -> T,
         {
             fn fallback<'a>() -> &'a Heap<'static, 'static> {
                 let (heap, id) = Pin::static_ref(&THREAD_LOCALS).assign();
@@ -47,20 +47,19 @@ macro_rules! thread_init_pthread {
         ///
         /// This function must be called only once for every initialized thread-local
         /// heap.
-        unsafe fn init(id: NonZeroU64) {
+        unsafe fn init(id: u64) {
             /// # Safety
             ///
             /// - `id` must be a valid thread-local heap ID;
             /// - the thread-local heap must not be used after calling this function.
             unsafe extern "C" fn fini(id: *mut core::ffi::c_void) {
-                if let Some(id) = NonZeroU64::new(id.addr().try_into().unwrap()) {
-                    HEAP.set(THREAD_LOCALS.empty_heap());
-                    // SAFETY: `id` is valid; the thread-local heap is no longer used.
-                    unsafe { Pin::static_ref(&THREAD_LOCALS).put(id) };
-                }
+                HEAP.set(THREAD_LOCALS.empty_heap());
+                let id = id.addr().try_into().unwrap();
+                // SAFETY: `id` is valid; the thread-local heap is no longer used.
+                unsafe { Pin::static_ref(&THREAD_LOCALS).put(id) };
             }
 
-            let data = ptr::without_provenance_mut(id.get().try_into().unwrap());
+            let data = ptr::without_provenance_mut(id.try_into().unwrap());
             unsafe { register_thread_dtor(data, fini) };
         }
 
@@ -112,7 +111,7 @@ macro_rules! thread_init_pthread {
 #[doc(hidden)]
 macro_rules! thread_init {
     () => {
-        unsafe fn init(_id: NonZeroU64) {}
+        unsafe fn init(_id: u64) {}
     };
 }
 
