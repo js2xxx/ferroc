@@ -136,8 +136,6 @@
 #![feature(allocator_api)]
 #![feature(const_pin)]
 #![feature(const_refs_to_static)]
-#![feature(if_let_guard)]
-#![feature(isqrt)]
 #![feature(let_chains)]
 #![feature(non_null_convenience)]
 #![feature(pointer_is_aligned_to)]
