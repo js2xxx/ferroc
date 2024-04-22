@@ -1,4 +1,4 @@
-use core::cell::Cell;
+use core::{cell::Cell, ptr};
 
 pub trait CellLinked<'a> {
     fn link(&'a self) -> &'a CellLink<'a, Self>;
@@ -71,7 +71,7 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
         #[cfg(debug_assertions)]
         debug_assert!(!value.link().is_linked());
         #[cfg(debug_assertions)]
-        value.link().linked_to.set((self as *const Self).addr());
+        value.link().linked_to.set(ptr::from_ref(self).addr());
 
         // INVARIANT: A link's `get` must be paired with a `set`, otherwise it must be
         // replaced with a `take`.
@@ -108,7 +108,7 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
 
     #[cfg(debug_assertions)]
     pub fn contains(&self, value: &'a T) -> bool {
-        value.link().linked_to.get() == (self as *const Self).addr()
+        value.link().linked_to.get() == ptr::from_ref(self).addr()
     }
 
     pub fn remove(&self, value: &'a T) {
@@ -142,7 +142,7 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
         #[cfg(debug_assertions)]
         other.len.set(other.len.get() + 1);
         #[cfg(debug_assertions)]
-        value.link().linked_to.set((other as *const Self).addr());
+        value.link().linked_to.set(ptr::from_ref(other).addr());
 
         // INVARIANT: A link's `get` must be paired with a `set`, otherwise it must be
         // replaced with a `take`.
@@ -182,8 +182,8 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
     }
 
     pub fn has_sole_member(&self) -> bool {
-        let head_addr = self.head.get().map(|x| (x as *const T).addr()).unwrap_or(0);
-        let tail_addr = self.tail.get().map(|x| (x as *const T).addr()).unwrap_or(0);
+        let head_addr = self.head.get().map(|x| ptr::from_ref(x).addr()).unwrap_or(0);
+        let tail_addr = self.tail.get().map(|x| ptr::from_ref(x).addr()).unwrap_or(0);
         head_addr == tail_addr
     }
 
