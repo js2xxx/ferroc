@@ -33,7 +33,7 @@ memmap2 = {version = "0.9", optional = true}
 
 [dev-dependencies]
 ctor = "0.2"
-fastrand = "2.0"
+fastrand = "2.1"
 
 [build-dependencies]
 cbindgen = {version = "0.26", optional = true}
