@@ -10,7 +10,7 @@ keywords = ["allocator", "no_std", "memory", "heap", "lock-free"]
 license = "MIT OR Apache-2.0"
 name = "ferroc"
 repository = "https://github.com/Js2xxx/ferroc"
-version = "1.0.0-pre.2"
+version = "1.0.0-pre.3"
 
 [features]
 base-mmap = ["dep:memmap2", "dep:libc"]
