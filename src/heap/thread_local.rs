@@ -75,6 +75,7 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
         }
     }
 
+    #[allow(clippy::declare_interior_mutable_const)]
     const NEW: Self = Bucket::new();
 
     fn allocate(bi: BucketIndex, arenas: &'arena Arenas<B>) -> Chunk<B> {
