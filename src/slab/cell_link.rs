@@ -182,8 +182,16 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
     }
 
     pub fn has_sole_member(&self) -> bool {
-        let head_addr = self.head.get().map(|x| ptr::from_ref(x).addr()).unwrap_or(0);
-        let tail_addr = self.tail.get().map(|x| ptr::from_ref(x).addr()).unwrap_or(0);
+        let head_addr = self
+            .head
+            .get()
+            .map(|x| ptr::from_ref(x).addr())
+            .unwrap_or(0);
+        let tail_addr = self
+            .tail
+            .get()
+            .map(|x| ptr::from_ref(x).addr())
+            .unwrap_or(0);
         head_addr == tail_addr
     }
 
