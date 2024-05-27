@@ -204,7 +204,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     /// Users can Store the information in its thread-local variable in 2 ways:
     ///
     /// 1. Store the thread ID only, and get access to the heap every time using
-    ///   `self.get`;
+    ///    `self.get`;
     /// 2. Store both the thread ID and the pinned heap.
     ///
     /// Both 2 ways needs to run its corresponding destructor manually. If RAII
