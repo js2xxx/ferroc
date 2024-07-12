@@ -124,13 +124,16 @@ fn bench_one<A: GlobalAlloc>(alloc: &A) -> Duration {
 
 unsafe fn allocate_one<A: GlobalAlloc>(size: usize, a: &A) -> Allocation<A> {
     let layout = Layout::from_size_align(size, 32).unwrap();
-    let ptr = NonNull::new(a.alloc(layout)).expect("out of memory");
-
-    ptr.cast::<u8>().as_ptr().write(0);
-    ptr.cast::<u8>().as_ptr().add(size - 1).write(0);
 
     Allocation {
-        ptr: Some(ptr.cast()),
+        ptr: Some(unsafe {
+            let ptr = NonNull::new(a.alloc(layout)).expect("out of memory");
+
+            ptr.cast::<u8>().as_ptr().write(0);
+            ptr.cast::<u8>().as_ptr().add(size - 1).write(0);
+
+            ptr.cast()
+        }),
         layout,
         marker: PhantomData,
     }

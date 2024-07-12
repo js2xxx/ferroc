@@ -1,9 +1,11 @@
+cargo-features = ["edition2024"]
+
 [package]
 authors = ["Js2xxx <akucxy@163.com>"]
 categories = ["memory-management", "no-std", "concurrency"]
 description = "A fast & lock-free memory allocator library"
 documentation = "https://docs.rs/ferroc"
-edition = "2021"
+edition = "2024"
 exclude = ["assets"]
 homepage = "https://github.com/Js2xxx/ferroc"
 keywords = ["allocator", "no_std", "memory", "heap", "lock-free"]
