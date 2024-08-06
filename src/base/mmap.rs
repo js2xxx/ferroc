@@ -89,7 +89,7 @@ unsafe impl BaseAlloc for Mmap {
 #[cfg(all(unix, not(miri)))]
 /// Returns the platform-specific value of errno
 pub fn errno() -> RawOsError {
-    extern "C" {
+    unsafe extern "C" {
         #[cfg_attr(
             any(
                 target_os = "linux",
