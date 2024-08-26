@@ -28,8 +28,13 @@ const BENCH_ARGS: &[BenchArg] = &[
     BenchArg { size: 168524, count: 1 },
 ];
 
+#[cfg(feature = "track-valgrind")]
+#[global_allocator]
+static FERROC: Ferroc = Ferroc;
+
 fn main() {
     println!("ferroc: {:?}", do_bench(&Ferroc));
+    #[cfg(not(feature = "track-valgrind"))]
     println!("system: {:?}", do_bench(&std::alloc::System));
 }
 

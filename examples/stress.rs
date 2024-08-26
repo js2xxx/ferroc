@@ -16,8 +16,13 @@ const SCALE: usize = 50;
 const ITER: usize = 25;
 const TRANSFER_COUNT: usize = 1000;
 
+#[cfg(feature = "track-valgrind")]
+#[global_allocator]
+static FERROC: Ferroc = Ferroc;
+
 fn main() {
     println!("ferroc: {:?}", do_bench(&Ferroc));
+    #[cfg(not(feature = "track-valgrind"))]
     println!("system: {:?}", do_bench(&std::alloc::System));
 }
 

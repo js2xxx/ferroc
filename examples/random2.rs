@@ -22,6 +22,7 @@ static FERROC: Ferroc = Ferroc;
 
 fn main() {
     println!("ferroc: {:.3?}", do_bench(&Ferroc));
+    #[cfg(not(feature = "track-valgrind"))]
     println!("system: {:.3?}", do_bench(&std::alloc::System));
 }
 
