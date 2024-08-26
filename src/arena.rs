@@ -47,8 +47,10 @@ impl<B: BaseAlloc> Arena<B> {
 
     fn header_layout(slab_count: usize, is_exclusive: bool) -> Layout {
         if !is_exclusive {
-            let bitmap_size = (slab_count * SLAB_SIZE).div_ceil(BYTE_WIDTH);
-            let n = bitmap_size.div_ceil(mem::size_of::<AtomicUsize>());
+            let bitmap_size = slab_count
+                .div_ceil(BYTE_WIDTH)
+                .next_multiple_of(mem::size_of::<AtomicUsize>());
+            let n = bitmap_size / mem::size_of::<AtomicUsize>();
 
             let bitmap_layout = Layout::array::<AtomicUsize>(n).unwrap();
             let (header_layout, offset) = Self::LAYOUT.extend(bitmap_layout).unwrap();
@@ -140,7 +142,9 @@ impl<B: BaseAlloc> Arena<B> {
         let (ptr, _) = self.header.pointer().to_raw_parts();
         NonNull::from_raw_parts(
             ptr.map_addr(|addr| addr.checked_add(Self::LAYOUT.size()).unwrap()),
-            (self.slab_count * SLAB_SIZE).div_ceil(BYTE_WIDTH),
+            self.slab_count
+                .div_ceil(BYTE_WIDTH)
+                .next_multiple_of(mem::size_of::<AtomicUsize>()),
         )
     }
 
@@ -261,9 +265,14 @@ impl<B: BaseAlloc> Arenas<B> {
                 arena.arena_id = index + 1;
                 Ok(arena)
             } else {
-                // SAFETY: The arena is freshly allocated.
-                unsafe { Arena::drop(arena.into()) };
-                Err(Error::ArenaExhausted)
+                #[cfg(not(err_on_exhaustion))]
+                panic!("ARENA EXHAUSTED");
+                #[cfg(err_on_exhaustion)]
+                {
+                    // SAFETY: The arena is freshly allocated.
+                    unsafe { Arena::drop(arena.into()) };
+                    Err(Error::ArenaExhausted)
+                }
             };
         }
     }
@@ -327,19 +336,27 @@ impl<B: BaseAlloc> Arenas<B> {
         align: usize,
         is_large_or_huge: bool,
     ) -> Result<SlabRef, Error<B>> {
-        let count = count.get()/* .max(self.slab_count.load(Relaxed).isqrt()) */;
+        let count = count.get();
 
-        self.collect_abandoned();
-        let ret = match self
-            .arenas(false)
-            .find_map(|(_, arena)| arena.allocate(thread_id, count, align, is_large_or_huge))
-        {
-            Some(slab) => slab,
-            None => {
-                let arena = Arena::new(self.base.clone(), count, Some(align), false)?;
-                let arena = self.push_arena(arena)?;
-                let res = arena.allocate(thread_id, count, align, is_large_or_huge);
-                res.unwrap()
+        let mut retry = 0;
+        let ret = loop {
+            self.collect_abandoned();
+            match self
+                .arenas(false)
+                .find_map(|(_, arena)| arena.allocate(thread_id, count, align, is_large_or_huge))
+            {
+                Some(slab) => break slab,
+                None if retry < 3 => retry += 1,
+                None => {
+                    const MIN_RESERVE_COUNT: usize = 32;
+
+                    let reserve_count = count.max(MIN_RESERVE_COUNT)
+                        /* .max(self.slab_count.load(Relaxed).isqrt()) */;
+                    let arena = Arena::new(self.base.clone(), reserve_count, Some(align), false)?;
+                    let arena = self.push_arena(arena)?;
+                    let res = arena.allocate(thread_id, count, align, is_large_or_huge);
+                    break res.unwrap();
+                }
             }
         };
         // self.slab_count.fetch_add(count, Relaxed);
