@@ -10,7 +10,7 @@ keywords = ["allocator", "no_std", "memory", "heap", "lock-free"]
 license = "MIT OR Apache-2.0"
 name = "ferroc"
 repository = "https://github.com/Js2xxx/ferroc"
-version = "0.3.0"
+version = "1.0.0-pre.1"
 
 [lib]
 crate-type = ["rlib", "cdylib", "staticlib"]
