@@ -1,4 +1,5 @@
 #![no_main]
+#![feature(let_chains)]
 #![feature(ptr_as_uninit)]
 
 use std::{alloc::Layout, iter, ptr::NonNull, sync::Mutex, thread};
@@ -39,7 +40,7 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
     actions.into_iter().for_each(|action| match action {
         Action::Allocate { size, align_shift } => {
             let align_shift = align_shift % 24;
-            let size = size % 262144 + 1;
+            let size = size % 16777216 + 1;
             let align = 1 << align_shift;
             // eprintln!("actual size = {size:#x}, align = {align:#x}");
 
@@ -48,22 +49,25 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
             }
         }
         Action::Deallocate { index } => {
-            let index = (index as usize) % allocations.len();
-            drop(allocations.swap_remove(index));
+            if let Some(index) = (index as usize).checked_rem(allocations.len()) {
+                drop(allocations.swap_remove(index));
+            }
         }
         Action::LayoutOf { index } => {
-            let index = (index as usize) % allocations.len();
-            allocations[index].check_layout();
+            if let Some(index) = (index as usize).checked_rem(allocations.len()) {
+                allocations[index].check_layout();
+            }
         }
         Action::Collect { force } => Ferroc.collect(force),
         Action::Transfer { from, to } => {
-            let from = (from as usize) % allocations.len();
-            let to = (to as usize) % transfers.len();
-
-            let a = allocations.swap_remove(from);
-            let o = transfers[to].lock().unwrap().replace(a);
-            if let Some(a) = o {
-                allocations.push(a);
+            if let Some(from) = (from as usize).checked_rem(allocations.len())
+                && let Some(to) = (to as usize).checked_rem(transfers.len())
+            {
+                let a = allocations.swap_remove(from);
+                let o = transfers[to].lock().unwrap().replace(a);
+                if let Some(a) = o {
+                    allocations.push(a);
+                }
             }
         }
     });
@@ -89,8 +93,20 @@ impl Allocation {
 
     fn check_layout(&self) {
         let req_layout = unsafe { Ferroc.layout_of(self.ptr.cast()) }.unwrap();
-        assert!(req_layout.size() >= self.layout.size());
-        assert!(req_layout.align() >= self.layout.align());
+        assert!(
+            req_layout.size() >= self.layout.size(),
+            "ptr = {:p}\nreq = {:#x?}\nl = {:#x?}",
+            self.ptr,
+            req_layout,
+            self.layout
+        );
+        assert!(
+            req_layout.align() >= self.layout.align(),
+            "ptr = {:p}\nreq = {:#x?}\nl = {:#x?}",
+            self.ptr,
+            req_layout,
+            self.layout
+        );
     }
 }
 
