@@ -31,7 +31,7 @@ const BENCH_ARGS: &[BenchArg] = &[
     BenchArg { size: 168524, count: 1 },
 ];
 
-#[cfg(feature = "track-valgrind")]
+#[cfg(not(miri))]
 #[global_allocator]
 static FERROC: Ferroc = Ferroc;
 

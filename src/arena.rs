@@ -6,6 +6,7 @@ mod bitmap;
 
 use core::{
     alloc::Layout,
+    cell::UnsafeCell,
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     panic,
@@ -407,14 +408,14 @@ impl<B: BaseAlloc> Arenas<B> {
         const MAX_TRIAL: usize = 8;
         let mut trial = MAX_TRIAL;
         while trial > 0
-            && let Some(mut slab) = self.pop_abandoned()
+            && let Some(slab) = self.pop_abandoned()
         {
             if slab.collect_abandoned() {
                 if slab.size >= count * SLAB_SIZE && slab.as_ptr().is_aligned_to(align) {
-                    let slab_source = match &mut slab.source {
-                        &mut SlabSource::Arena(aid) => SlabSource::Arena(aid),
+                    let slab_source = match &slab.source {
+                        &SlabSource::Arena(aid) => SlabSource::Arena(aid),
                         SlabSource::Base { chunk } => SlabSource::Base {
-                            chunk: ManuallyDrop::new(unsafe { ManuallyDrop::take(chunk) }),
+                            chunk: UnsafeCell::new(unsafe { ptr::read(chunk.get()) }),
                         },
                     };
                     let raw = slab.into_raw();
@@ -499,14 +500,11 @@ impl<B: BaseAlloc> Arenas<B> {
                 _ if direct => {
                     let res = self.base().allocate(slab_layout(reserve_count), true);
                     let chunk = res.map_err(Error::Alloc)?;
-                    let slab = unsafe {
-                        Slab::init(
-                            chunk.pointer(),
-                            thread_id,
-                            SlabSource::Base { chunk: ManuallyDrop::new(chunk) },
-                            B::IS_ZEROED,
-                        )
+                    let ptr = chunk.pointer();
+                    let source = SlabSource::Base {
+                        chunk: UnsafeCell::new(ManuallyDrop::new(chunk)),
                     };
+                    let slab = unsafe { Slab::init(ptr, thread_id, source, B::IS_ZEROED) };
                     Ok(slab)
                 }
                 Err(err) => Err(err),
@@ -520,10 +518,10 @@ impl<B: BaseAlloc> Arenas<B> {
     /// # Safety
     ///
     /// `slab` must be previously allocated from this structure;
-    pub(crate) unsafe fn deallocate(&self, mut slab: SlabRef<B>) {
+    pub(crate) unsafe fn deallocate(&self, slab: SlabRef<B>) {
         if !slab.is_abandoned() {
-            match &mut slab.source {
-                &mut SlabSource::Arena(id) => {
+            match &slab.source {
+                &SlabSource::Arena(id) => {
                     let arena = self.arenas[id.get() - 1].load(Acquire);
                     debug_assert!(!arena.is_null());
                     // SAFETY: `arena` is obtained from the unique `arena_id`, and the arena won't
@@ -531,10 +529,10 @@ impl<B: BaseAlloc> Arenas<B> {
                     let _slab_count = unsafe { (*arena).deallocate(slab, &self.base) };
                 }
                 SlabSource::Base { chunk } => {
-                    let chunk = unsafe { ManuallyDrop::take(chunk) };
+                    let chunk = unsafe { ptr::read(chunk.get()) };
                     #[warn(clippy::forget_non_drop)]
                     mem::forget(slab);
-                    drop(chunk);
+                    drop(ManuallyDrop::into_inner(chunk));
                 }
             }
         } else {

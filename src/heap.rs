@@ -973,9 +973,11 @@ impl<F> AllocateOptions<F> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(miri))]
     use crate::heap::{obj_size, obj_size_index, GRANULARITY_SHIFT};
 
     #[test]
+    #[cfg(not(miri))]
     fn test_obj_size() {
         let size_a = (0..8).map(|i| i << GRANULARITY_SHIFT);
         let size_b = |sft| (8..16usize).map(move |size| size << (sft + GRANULARITY_SHIFT));

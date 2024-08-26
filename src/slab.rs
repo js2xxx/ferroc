@@ -4,12 +4,12 @@ mod cell_link;
 #[cfg(any(miri, feature = "track-valgrind"))]
 use core::sync::atomic::AtomicU8;
 use core::{
-    cell::Cell,
+    cell::{Cell, UnsafeCell},
     hint,
     marker::PhantomData,
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
-    ops::{Deref, DerefMut},
+    ops::Deref,
     ptr::{self, addr_of_mut, NonNull},
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering::*},
 };
@@ -34,13 +34,6 @@ impl<'a, B: BaseAlloc> Deref for SlabRef<'a, B> {
     fn deref(&self) -> &Self::Target {
         // SAFETY: The slab contains valid slab data.
         unsafe { self.0.cast().as_ref() }
-    }
-}
-
-impl<'a, B: BaseAlloc> DerefMut for SlabRef<'a, B> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: The slab contains valid slab data.
-        unsafe { self.0.cast().as_mut() }
     }
 }
 
@@ -83,7 +76,9 @@ impl<'a, B: BaseAlloc> Drop for SlabRef<'a, B> {
 
 pub(crate) enum SlabSource<B: BaseAlloc> {
     Arena(NonZeroUsize),
-    Base { chunk: ManuallyDrop<Chunk<B>> },
+    Base {
+        chunk: UnsafeCell<ManuallyDrop<Chunk<B>>>,
+    },
 }
 
 /// The slab data header, usually consumes a shard.

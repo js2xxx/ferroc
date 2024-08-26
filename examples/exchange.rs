@@ -39,6 +39,7 @@ const BATCH_SIZE: usize = 4096;
 const THREADS: usize = 12;
 const SLEEP: u64 = 5;
 
+#[cfg(not(miri))]
 #[global_allocator]
 static FERROC: Ferroc = Ferroc;
 
