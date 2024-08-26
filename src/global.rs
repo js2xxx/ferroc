@@ -66,22 +66,17 @@ macro_rules! config_inner {
         #[doc = concat!("The heap type of the `", stringify!($bt), "` backend.")]
         #[doc = concat!("\n\nSee [`Heap`](", stringify!($crate), "::heap::Heap) for more information.")]
         $vis type Heap<'arena, 'cx> = $crate::heap::Heap<'arena, 'cx, $bt>;
-        #[doc = concat!("The context type of the `", stringify!($bt), "` backend.")]
-        #[doc = concat!("\n\nSee [`Context`](", stringify!($crate), "::heap::Context) for more information.")]
-        $vis type Context<'arena> = $crate::heap::Context<'arena, $bt>;
         #[doc = concat!("The arena collection type of the `", stringify!($bt), "` backend.")]
         #[doc = concat!("\n\nSee [`Arenas`](", stringify!($crate), "::arena::Arenas) for more information.")]
         $vis type Arenas = $crate::arena::Arenas<$bt>;
         #[doc = concat!("The error type of the `", stringify!($bt), "` backend.")]
         #[doc = concat!("\n\nSee [`Error`](", stringify!($crate), "::arena::Error) for more information.")]
         $vis type Error = $crate::arena::Error<$bt>;
-        #[doc = concat!("The thread-local heap collection of the `", stringify!($bt), "` backend.")]
-        #[doc = concat!("\n\nSee [`ThreadLocal`](", stringify!($crate), "::heap::ThreadLocal) for more information.")]
-        $vis type ThreadLocal<'arena> = $crate::heap::ThreadLocal<'arena, $bt>;
+        type ThreadLocal<'arena> = $crate::heap::ThreadLocal<'arena, $bt>;
     };
     (@ARENA $vis:vis, $bs:expr) => {
         static ARENAS: Arenas = Arenas::new($bs);
-        pub static THREAD_LOCALS: ThreadLocal<'static> = ThreadLocal::new(&ARENAS);
+        static THREAD_LOCALS: ThreadLocal<'static> = ThreadLocal::new(&ARENAS);
     };
     (@DEF $vis:vis, $name:ident, $bt:ty) => {
         #[doc = concat!("The configured allocator backed by `", stringify!($bt), "`.\n\n")]
