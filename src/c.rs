@@ -1,6 +1,6 @@
 use core::{
     alloc::{Allocator, Layout},
-    ffi::{c_char, c_int, c_void},
+    ffi::{c_int, c_void},
     ptr::{self, NonNull},
 };
 
@@ -135,7 +135,8 @@ pub unsafe extern "C" fn realloc(ptr: *mut c_void, new_size: usize) -> *mut c_vo
 }
 
 #[no_mangle]
-#[cfg_attr(not(sys_alloc), export_name = "fe_strdup")]
+#[cfg(not(sys_alloc))]
+#[export_name = "fe_strdup"]
 pub unsafe extern "C" fn strdup(s: *const c_char) -> *mut c_char {
     let len = libc::strlen(s);
     let ptr = malloc(len + 1).cast::<c_char>();
@@ -147,7 +148,8 @@ pub unsafe extern "C" fn strdup(s: *const c_char) -> *mut c_char {
 }
 
 #[no_mangle]
-#[cfg_attr(not(sys_alloc), export_name = "fe_strndup")]
+#[cfg(not(sys_alloc))]
+#[export_name = "fe_strndup"]
 pub unsafe extern "C" fn strndup(s: *const c_char, n: usize) -> *mut c_char {
     let len = libc::strnlen(s, n);
     let ptr = malloc(len + 1).cast::<c_char>();
@@ -159,7 +161,8 @@ pub unsafe extern "C" fn strndup(s: *const c_char, n: usize) -> *mut c_char {
 }
 
 #[no_mangle]
-#[cfg_attr(not(sys_alloc), export_name = "fe_realpath")]
+#[cfg(not(sys_alloc))]
+#[export_name = "fe_realpath"]
 pub unsafe extern "C" fn realpath(name: *const c_char, resolved: *mut c_char) -> *mut c_char {
     if !resolved.is_null() {
         return libc::realpath(name, resolved);
