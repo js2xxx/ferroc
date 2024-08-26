@@ -135,6 +135,8 @@ pub struct ThreadLocal<'arena, B: BaseAlloc> {
     arena: &'arena Arenas<B>,
 
     empty_heap: Heap<'arena, 'arena, B>,
+
+    main: UnsafeCell<MaybeUninit<Entry<'arena, B>>>,
     buckets: [Bucket<'arena, B>; BUCKETS],
 
     next_reclaimed_id: AtomicU64,
@@ -158,6 +160,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
         Self {
             arena,
             empty_heap: Heap::new_uninit(),
+            main: UnsafeCell::new(MaybeUninit::uninit()),
             buckets: [Bucket::NEW; BUCKETS],
             next_reclaimed_id: AtomicU64::new(0),
             next_id: AtomicU64::new(1),
@@ -209,22 +212,38 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     /// # Panics
     ///
     /// Panics if the acquisition failed.
-    pub fn assign(self: Pin<&Self>) -> (Pin<&Heap<'arena, '_, B>>, NonZeroU64) {
+    pub fn assign(self: Pin<&Self>) -> (Pin<&Heap<'arena, '_, B>>, u64) {
         // SAFETY: `id` is used to initialize its thread data entry below immediately.
         let id = unsafe { self.acquire_id() };
-        let bi = BucketIndex::from_id(id);
-        // SAFETY: `id` is freshly allocated, which belongs to no other thread.
-        //
-        // Note that while  freshly allocated, the value of `id` may be reclaimed from
-        // another dead thread, which means its thread data entry can be already
-        // initialized and should not be `insert`ed unconditionally.
-        let heap = unsafe {
-            self.map_unchecked(|this| {
-                if let Some(heap) = this.get_inner(bi) {
-                    return heap;
+        let heap = match NonZeroU64::new(id) {
+            // SAFETY: The id 0 is only assigned once to the main heap, and will never be recycled.
+            None => unsafe {
+                let pointer = self.main.get();
+                let td = (*pointer).write(Entry {
+                    cx: ManuallyDrop::new(Context::new(self.arena)),
+                    heap: ManuallyDrop::new(Heap::new_uninit()),
+                    next_reclaimed_id: AtomicU64::new(0),
+                    _marker: PhantomPinned,
+                });
+                td.heap.init(Pin::new_unchecked(&td.cx));
+                Pin::new_unchecked(&*td.heap)
+            },
+            Some(id) => {
+                let bi = BucketIndex::from_id(id);
+                // SAFETY: `id` is freshly allocated, which belongs to no other thread.
+                //
+                // Note that while  freshly allocated, the value of `id` may be reclaimed from
+                // another dead thread, which means its thread data entry can be already
+                // initialized and should not be `insert`ed unconditionally.
+                unsafe {
+                    self.map_unchecked(|this| {
+                        if let Some(heap) = this.get_inner(bi) {
+                            return heap;
+                        }
+                        this.insert(bi)
+                    })
                 }
-                this.insert(bi)
-            })
+            }
         };
         (heap, id)
     }
@@ -233,21 +252,20 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     ///
     /// The corresponding thread data entry to the returned ID must be
     /// initialized after acquisition.
-    unsafe fn acquire_id(self: Pin<&Self>) -> NonZeroU64 {
+    unsafe fn acquire_id(self: Pin<&Self>) -> u64 {
         let mut id = self.next_reclaimed_id.load(Relaxed);
         loop {
             let Some(ret) = NonZeroU64::new(id) else {
                 const MAX_ID: u64 = i64::MAX as u64;
                 const SATURATED_ID: u64 = (MAX_ID & u64::MAX) + ((MAX_ID ^ u64::MAX) >> 1);
 
-                break match self.next_id.fetch_add(1, Relaxed) {
+                match self.next_id.fetch_add(1, Relaxed) {
                     MAX_ID.. => {
                         self.next_id.store(SATURATED_ID, Relaxed);
                         panic!("Thread ID overflow");
                     }
-                    // SAFETY: `next_id` is less than `MAX_ID` and greater than 0.
-                    next_id => unsafe { NonZeroU64::new_unchecked(next_id) },
-                };
+                    next_id => break next_id,
+                }
             };
             let bi = BucketIndex::from_id(ret);
             // SAFETY: Every reclaimed id corresponds to a previously owner thread alongside
@@ -259,7 +277,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
                 .next_reclaimed_id
                 .compare_exchange_weak(id, next, AcqRel, Acquire)
             {
-                Ok(_) => break ret,
+                Ok(_) => break ret.get(),
                 Err(actual) => id = actual,
             }
         }
@@ -277,7 +295,10 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     ///   heap.
     ///
     /// [assign]: ThreadLocal::assign
-    pub unsafe fn put(self: Pin<&Self>, id: NonZeroU64) {
+    pub unsafe fn put(self: Pin<&Self>, id: u64) {
+        let Some(id) = NonZeroU64::new(id) else {
+            return;
+        };
         let mut old = self.next_reclaimed_id.load(Relaxed);
         loop {
             let bi = BucketIndex::from_id(id);
@@ -422,7 +443,7 @@ impl<'arena, B: BaseAlloc> Drop for ThreadLocal<'arena, B> {
 pub struct ThreadData<'t, 'arena, B: BaseAlloc> {
     thread_local: Pin<&'t ThreadLocal<'arena, B>>,
     heap: Pin<&'t Heap<'arena, 't, B>>,
-    id: NonZeroU64,
+    id: u64,
 }
 
 impl<'t, 'arena: 't, B: BaseAlloc> ThreadData<'t, 'arena, B> {
