@@ -125,7 +125,7 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
 pub struct ThreadLocal<'arena, B: BaseAlloc> {
     arena: &'arena Arenas<B>,
 
-    uninit: Heap<'arena, 'arena, B>,
+    empty_heap: Heap<'arena, 'arena, B>,
     buckets: [Bucket<'arena, B>; BUCKETS],
 
     next_reclaimed_id: AtomicU64,
@@ -141,7 +141,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     pub const fn new(arena: &'arena Arenas<B>) -> Self {
         Self {
             arena,
-            uninit: Heap::new_uninit(),
+            empty_heap: Heap::new_uninit(),
             buckets: [Bucket::NEW; BUCKETS],
             next_reclaimed_id: AtomicU64::new(0),
             next_id: AtomicU64::new(1),
@@ -154,8 +154,8 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     ///
     /// This method is safe because uninitialized heap doesn't mutate its inner
     /// data at all, thus ideomatically `Sync`.
-    pub const fn uninit_heap(&'static self) -> Pin<&'static Heap<'static, 'static, B>> {
-        Pin::static_ref(&self.uninit)
+    pub const fn empty_heap(&'static self) -> Pin<&'static Heap<'static, 'static, B>> {
+        Pin::static_ref(&self.empty_heap)
     }
 }
 
@@ -191,7 +191,16 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
         let mut id = self.next_reclaimed_id.load(Relaxed);
         loop {
             let Some(ret) = NonZeroU64::new(id) else {
-                break NonZeroU64::new(self.next_id.fetch_add(1, Relaxed)).unwrap();
+                const MAX_ID: u64 = i64::MAX as u64;
+                const SATURATED_ID: u64 = (MAX_ID & u64::MAX) + ((MAX_ID ^ u64::MAX) >> 1);
+
+                break match self.next_id.fetch_add(1, Relaxed) {
+                    SATURATED_ID.. => {
+                        self.next_id.store(SATURATED_ID, Relaxed);
+                        panic!("Thread ID overflow");
+                    }
+                    next_id => unsafe { NonZeroU64::new_unchecked(next_id) },
+                };
             };
             let bi = BucketIndex::from_id(ret);
             let td = self.thread_data(bi).unwrap_unchecked();

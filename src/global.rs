@@ -10,7 +10,7 @@ macro_rules! config_stat {
         ///
         /// This function forwards the call to [`Heap::stat`].
         $vis fn stat(&self) -> $crate::stat::Stat {
-            thread::with(|heap| heap.stat()).unwrap_or_default()
+            thread::with(|heap| heap.stat())
         }
     };
 }
@@ -30,7 +30,7 @@ macro_rules! config_c {
         #[inline]
         pub(crate) fn malloc(
             &self,
-            size: core::num::NonZeroUsize,
+            size: usize,
             zero: bool,
         ) -> Result<core::ptr::NonNull<[u8]>, Error> {
             thread::with_lazy(|heap| heap.malloc(size, zero))

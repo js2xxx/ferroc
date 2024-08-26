@@ -5,11 +5,11 @@ pub struct Stat {
     pub slabs: usize,
     pub shards: usize,
 
-    // pub direct_size: usize,
+    pub direct_size: usize,
     pub normal_size: usize,
     pub huge_size: usize,
 
-    // pub direct_count: usize,
+    pub direct_count: usize,
     pub normal_count: [usize; OBJ_SIZE_COUNT],
     pub huge_count: usize,
 
@@ -31,10 +31,10 @@ impl Stat {
         shards: 0,
         normal_size: 0,
         huge_size: 0,
-        // direct_size: 0,
+        direct_size: 0,
         normal_count: [0; OBJ_SIZE_COUNT],
         huge_count: 0,
-        // direct_count: 0,
+        direct_count: 0,
         free_shards: 0,
         abandoned_slabs: 0,
         abandoned_shards: 0,

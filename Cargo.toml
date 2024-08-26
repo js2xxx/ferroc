@@ -27,6 +27,7 @@ stat = []
 track-valgrind = ["dep:crabgrind"]
 
 [dependencies]
+array-macro = "2.1"
 crabgrind = {version = "=0.1.9", optional = true}
 libc = {version = "0.2", optional = true}
 memmap2 = {version = "0.9", optional = true}
