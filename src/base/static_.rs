@@ -52,8 +52,10 @@ impl<const HEADER_CAP: usize> Default for Static<HEADER_CAP> {
 unsafe impl<const HEADER_CAP: usize> Sync for Static<HEADER_CAP> {}
 
 impl<const HEADER_CAP: usize> Static<HEADER_CAP> {
+    /// The initialization constant. Equivalent to [`Self::new`].
     pub const INIT: Self = Self::new();
 
+    /// Creates a new base allocator that allocates static memory only.
     pub const fn new() -> Self {
         Static {
             memory: UnsafeCell::new([0; HEADER_CAP]),

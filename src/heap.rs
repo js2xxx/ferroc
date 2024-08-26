@@ -84,9 +84,17 @@ pub const fn obj_size_type(size: usize) -> ObjSizeType {
 /// The type of object sizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ObjSizeType {
+    /// The size type of which the sizes must be smaller than or equal to
+    /// [`SMALL_MAX`](Self::SMALL_MAX).
     Small,
+    /// The size type of which the sizes must lie within the range of
+    /// [`SMALL_MAX`](Self::SMALL_MAX)` + 1..=`[`MEDIUM_MAX`](Self::MEDIUM_MAX).
     Medium,
+    /// The size type of which the sizes must lie within the range of
+    /// [`MEDIUM_MAX`](Self::MEDIUM_MAX)` + 1..=`[`LARGE_MAX`](Self::LARGE_MAX).
     Large,
+    /// The size type of which the sizes must be greater than
+    /// [`LARGE_MAX`](Self::LARGE_MAX)`.
     Huge,
 }
 use ObjSizeType::*;

@@ -109,6 +109,8 @@ impl<T> BaseError for T where T: core::fmt::Display {}
 pub struct Chunk<B: BaseAlloc> {
     ptr: NonNull<u8>,
     layout: Layout,
+    /// The handle/metadata given from the base allocator that owns this chunk.
+    /// Used for base allocators to deallocate or modify information of it.
     pub handle: B::Handle,
 }
 
