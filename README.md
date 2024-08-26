@@ -80,15 +80,13 @@ fn main() {
 
 ## Benchmarks
 
-Using a subset of [`mimalloc-bench`](https://github.com/daanx/mimalloc-bench) for benchmarking. Running on my laptop with 16GB of RAM and an Intel i7-10750H CPU @ 2.60GHz.
+Using a subset of [`mimalloc-bench`](https://github.com/daanx/mimalloc-bench) for benchmarking. Running on my laptop with 16GB of RAM and an Intel i7-10750H CPU @ 2.60GHz. The process is repeated 10 times and the results are averaged and taken as logarithms.
 
 Time consumed:
-
-<iframe src="./assets/time.html" frameborder=0 allowfullscreen> </iframe>
+![Time consumed](./assets/time.png)
 
 Memory consumed:
-
-<iframe src="./assets/memory.html" frameborder=0 allowfullscreen> </iframe>
+![Memory consumed](./assets/memory.png)
 
 ## Caveats
 
