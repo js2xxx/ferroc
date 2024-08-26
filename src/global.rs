@@ -25,6 +25,23 @@ thread_local! {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Ferroc;
 
+impl Ferroc {
+    pub fn collect(&self, force: bool) {
+        HEAP.with(|heap| heap.collect(force))
+    }
+
+    pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, Error> {
+        HEAP.with(|heap| heap.allocate(layout))
+    }
+
+    /// # Safety
+    ///
+    /// See [`Allocator::deallocate`] for more information.
+    pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        HEAP.with(|heap| heap.deallocate(ptr, layout))
+    }
+}
+
 unsafe impl Allocator for Ferroc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         HEAP.with(|heap| Allocator::allocate(&heap, layout))
