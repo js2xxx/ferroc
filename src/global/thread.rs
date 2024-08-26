@@ -10,7 +10,7 @@ macro_rules! thread_statics {
     () => {
         use core::{cell::Cell, num::NonZeroU64, pin::Pin, ptr};
 
-        use super::{Error, Heap, THREAD_LOCALS};
+        use super::{Heap, THREAD_LOCALS};
 
         #[thread_local]
         static HEAP: Cell<Pin<&Heap>> = Cell::new(THREAD_LOCALS.empty_heap());
@@ -20,18 +20,19 @@ macro_rules! thread_statics {
         }
 
         #[inline(always)]
-        pub fn with_lazy<T>(f: impl Fn(&Heap) -> Result<T, Error>) -> Result<T, Error> {
-            match f(&HEAP.get()) {
-                Ok(t) => Ok(t),
-                Err(Error::Uninit) => {
-                    let (heap, id) = Pin::static_ref(&THREAD_LOCALS).assign();
-                    // SAFETY: `init` is called only once for every thread-local heap.
-                    unsafe { init(id) };
-                    HEAP.set(heap);
-                    f(&heap)
-                }
-                Err(err) => Err(err),
+        pub fn with_lazy<T, F>(f: F) -> T
+        where
+            F: FnOnce(&'static Heap, fn() -> &'static Heap<'static, 'static>) -> T,
+        {
+            fn fallback<'a>() -> &'a Heap<'static, 'static> {
+                let (heap, id) = Pin::static_ref(&THREAD_LOCALS).assign();
+                // SAFETY: `init` is called only once for every thread-local heap.
+                unsafe { init(id) };
+                HEAP.set(heap);
+                Pin::get_ref(heap)
             }
+
+            f(Pin::get_ref(HEAP.get()), fallback)
         }
     };
 }

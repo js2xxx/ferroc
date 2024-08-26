@@ -22,7 +22,7 @@ use crate::{
 
 const BYTE_WIDTH: usize = u8::BITS as usize;
 
-pub const SLAB_SHIFT: usize = 2 + 10 + 10;
+pub const SLAB_SHIFT: u32 = 2 + 10 + 10;
 pub const SLAB_SIZE: usize = 1 << SLAB_SHIFT;
 
 pub const fn slab_layout(n: usize) -> Layout {
@@ -32,7 +32,7 @@ pub const fn slab_layout(n: usize) -> Layout {
     }
 }
 
-pub(crate) const SHARD_SHIFT: usize = 6 + 10;
+pub(crate) const SHARD_SHIFT: u32 = 6 + 10;
 pub(crate) const SHARD_SIZE: usize = 1 << SHARD_SHIFT;
 
 pub(crate) const SHARD_COUNT: usize = SLAB_SIZE / SHARD_SIZE;
@@ -532,8 +532,6 @@ pub enum Error<B: BaseAlloc> {
     Commit(B::Error),
     /// The arena collection is full of arenas.
     ArenaExhausted,
-    /// The heap is not yet initialized.
-    Uninit,
     /// Allocations for this layout is not yet supported.
     Unsupported(Layout),
 }
@@ -549,7 +547,6 @@ where
             Error::Alloc(err) => write!(f, "base allocation failed: {err}"),
             Error::Commit(err) => write!(f, "base commission failed: {err}"),
             Error::ArenaExhausted => write!(f, "the arena collection is full of arenas"),
-            Error::Uninit => write!(f, "uninitialized heap"),
             Error::Unsupported(layout) => write!(f, "unsupported layout: {layout:?}"),
         }
     }

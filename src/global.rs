@@ -33,7 +33,7 @@ macro_rules! config_c {
             size: usize,
             zero: bool,
         ) -> Result<core::ptr::NonNull<[u8]>, Error> {
-            thread::with_lazy(|heap| heap.malloc(size, zero))
+            thread::with_lazy(|heap, fallback| heap.malloc(size, zero, fallback))
         }
 
         #[inline]
@@ -142,7 +142,7 @@ macro_rules! config_inner {
             $vis fn allocate(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, Error>
             {
-                thread::with_lazy(|heap| heap.allocate(layout))
+                thread::with_lazy(|heap, fallback| heap.allocate_with(layout, fallback))
             }
 
             /// Allocate a zeroed memory block of `layout` from the current heap.
@@ -160,7 +160,7 @@ macro_rules! config_inner {
             $vis fn allocate_zeroed(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, Error>
             {
-                thread::with_lazy(|heap| heap.allocate_zeroed(layout))
+                thread::with_lazy(|heap, fallback| heap.allocate_with(layout, fallback))
             }
 
             /// Retrieves the layout information of a specific allocation.
