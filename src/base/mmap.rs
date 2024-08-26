@@ -30,6 +30,7 @@ unsafe impl BaseAlloc for Mmap {
             (addr + layout.align() - 1) & !(layout.align() - 1)
         }
 
+        let layout = layout.pad_to_align();
         let mut options = memmap2::MmapOptions::new();
         if commit {
             options.populate();

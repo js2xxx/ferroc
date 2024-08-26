@@ -314,7 +314,6 @@ impl<B: BaseAlloc> Arenas<B> {
     }
 
     fn push_abandoned_visited(&self, slab: SlabRef) {
-        debug_assert!(slab.is_abandoned());
         let mut next = self.abandoned_visited.load(Relaxed);
         loop {
             slab.abandoned_next.store(next, Relaxed);
@@ -441,6 +440,11 @@ impl<B: BaseAlloc> Arenas<B> {
     /// This function creates a new arena from the chunk and push it to the
     /// collection for further allocation, extending the heap's overall
     /// capacity.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the alignment of the chunk is less then
+    /// [`SLAB_SIZE`].
     ///
     /// # Errors
     ///

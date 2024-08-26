@@ -108,6 +108,11 @@ macro_rules! config_inner {
             /// capacity.
             ///
             /// This function forwards the call to [`Arenas::manage`].
+            ///
+            /// # Panics
+            ///
+            /// This function panics if the alignment of the chunk is less than
+            #[doc = concat!("[`SLAB_SIZE`](", stringify!($crate), "::arena::SLAB_SIZE).")]
             #[inline]
             $vis fn manage(&self, chunk: Chunk) -> Result<(), Error> {
                 ARENAS.manage(chunk)
