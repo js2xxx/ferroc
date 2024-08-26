@@ -246,7 +246,7 @@ impl<B: BaseAlloc> Arenas<B> {
     }
 
     fn push_abandoned(&self, slab: SlabRef) {
-        assert!(slab.is_abandoned());
+        debug_assert!(slab.is_abandoned());
         let mut next = self.abandoned.load(Relaxed);
         loop {
             slab.abandoned_next.store(next, Relaxed);

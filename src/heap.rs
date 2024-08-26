@@ -172,7 +172,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         stat: &mut Stat,
         set_align: bool,
     ) -> Result<NonNull<[u8]>, Error<B>> {
-        debug_assert!(size > SHARD_SIZE);
+        debug_assert!(size > ObjSizeType::LARGE_MAX);
 
         let count = (Slab::HEADER_COUNT * SHARD_SIZE + size).div_ceil(SLAB_SIZE);
         let count = NonZeroUsize::new(count).unwrap();
@@ -237,7 +237,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let pop_from_list = |_stat: &mut Stat| {
             let mut cursor = list.cursor_head();
             loop {
-                let shard = *cursor.get()?;
+                let shard = cursor.get()?;
                 shard.collect(false);
                 shard.extend();
 
@@ -256,7 +256,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                     None => {
                         cursor.remove();
                         shard.is_in_full.set(true);
-                        self.full_shards.push(shard)
+                        self.full_shards.push(shard);
                     }
                 }
             }
@@ -297,6 +297,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             let mut has_unfulled = false;
             unfulled.for_each(|shard| {
                 let i = obj_size_index(shard.obj_size.load(Relaxed));
+                shard.is_in_full.set(false);
                 self.shards[i].push(shard);
                 has_unfulled |= i == index;
             });
@@ -448,12 +449,14 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 }
 
                 if was_full {
-                    self.full_shards.remove(shard);
+                    let _ret = self.full_shards.remove(shard);
+                    debug_assert!(_ret);
                     self.shards[index].push(shard);
                 }
 
                 if is_unused && self.shards[index].len() > 1 {
-                    self.shards[index].remove(shard);
+                    let _ret = self.shards[index].remove(shard);
+                    debug_assert!(_ret);
                     self.cx.finalize_shard(shard, &mut stat);
                 }
             } else {
@@ -504,6 +507,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Drop for Heap<'arena, 'cx, B> {
         let iter = (self.shards.iter()).chain([&self.huge_shards, &self.full_shards]);
         iter.flat_map(|l| l.drain(|_| true)).for_each(|shard| {
             shard.collect(false);
+            shard.is_in_full.set(false);
             self.cx.finalize_shard(shard, &mut stat);
         });
         self.cx.heap_count.set(self.cx.heap_count.get() - 1);

@@ -127,12 +127,11 @@ impl<'a> Slab<'a> {
     /// # Safety
     ///
     /// `this` must points to a valid slab.
-    unsafe fn shard_area(this: NonNull<Self>, index: usize) -> NonNull<[u8]> {
+    unsafe fn shard_area(this: NonNull<Self>, index: usize) -> NonNull<u8> {
         debug_assert!(index < SHARD_COUNT);
         let ptr = this.cast::<u8>();
         // SAFETY: `index` is bounded by the assertion.
-        let ptr = unsafe { ptr.add(index * SHARD_SIZE) };
-        NonNull::from_raw_parts(ptr.cast(), SHARD_SIZE)
+        unsafe { ptr.add(index * SHARD_SIZE) }
     }
 
     /// # Safety
@@ -228,7 +227,7 @@ impl<'a> Slab<'a> {
 /// from [`Slab`].
 #[derive(Default)]
 pub(crate) struct Shard<'a> {
-    link: CellLink<&'a Self>,
+    link: CellLink<'a, Self>,
     shard_count: Cell<usize>,
 
     pub(crate) obj_size: AtomicUsize,
@@ -245,14 +244,14 @@ pub(crate) struct Shard<'a> {
     thread_free: AtomicBlockRef<'a>,
 }
 
-impl<'a> PartialEq for &'a Shard<'a> {
+impl<'a> PartialEq for Shard<'a> {
     fn eq(&self, other: &Self) -> bool {
         ptr::eq(self, other)
     }
 }
 
-impl<'a> CellLinked for &'a Shard<'a> {
-    fn link(&self) -> &CellLink<Self> {
+impl<'a> CellLinked<'a> for Shard<'a> {
+    fn link(&'a self) -> &'a CellLink<'a, Self> {
         &self.link
     }
 }
@@ -403,7 +402,7 @@ impl<'a> Shard<'a> {
 
         // SAFETY: the `area` is owned by this shard in a similar way to `Cell<[u8]>`.
         let iter = (capacity..capacity + count).map(|index| unsafe {
-            let ptr = area.cast::<u8>().add(index * obj_size);
+            let ptr = area.add(index * obj_size);
             ptr.write_bytes(0, mem::size_of::<Block>());
             BlockRef::from_raw(ptr.cast())
         });
@@ -491,6 +490,8 @@ impl<'a> Shard<'a> {
     }
 
     pub(crate) fn fini(&self, _stat: &mut Stat) -> Result<Option<&Self>, SlabRef> {
+        debug_assert!(!self.link.is_linked());
+
         let (slab, _) = self.slab();
         if self.is_unused() {
             slab.used.set(slab.used.get() - 1);
@@ -515,7 +516,7 @@ impl<'a> Shard<'a> {
     }
 }
 
-pub(crate) type ShardList<'a> = CellList<&'a Shard<'a>>;
+pub(crate) type ShardList<'a> = CellList<'a, Shard<'a>>;
 
 /// An allocated block before delivered to the user. That is to say, it contains
 /// a valid [`Block`].
