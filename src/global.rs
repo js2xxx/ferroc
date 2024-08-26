@@ -8,7 +8,8 @@ macro_rules! config_c {
     ($vis:vis) => {
         #[inline]
         pub(crate) fn malloc(&self, size: usize, zero: bool) -> Option<core::ptr::NonNull<()>> {
-            thread::with_lazy(|heap, fallback| heap.malloc(size, zero, fallback))
+            // SAFETY: `fallback` returns an initialized heap.
+            thread::with_lazy(|heap, fallback| unsafe { heap.malloc(size, zero, fallback) })
         }
 
         #[inline]
@@ -118,7 +119,8 @@ macro_rules! config_inner {
                 -> Result<core::ptr::NonNull<()>, core::alloc::AllocError>
             {
                 thread::with_lazy(|heap, fallback| {
-                    let options = AllocateOptions::new(fallback);
+                    // SAFETY: this fallback returns an initialized heap.
+                    let options = unsafe { AllocateOptions::new(fallback) };
                     heap.allocate_with(layout, false, options)
                 })
             }
@@ -139,7 +141,8 @@ macro_rules! config_inner {
                 -> Result<core::ptr::NonNull<()>, core::alloc::AllocError>
             {
                 thread::with_lazy(|heap, fallback| {
-                    let options = AllocateOptions::new(fallback);
+                    // SAFETY: this fallback returns an initialized heap.
+                    let options = unsafe { AllocateOptions::new(fallback) };
                     heap.allocate_with(layout, true, options)
                 })
             }
@@ -184,20 +187,24 @@ macro_rules! config_inner {
             fn allocate(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
-                thread::with_lazy(|heap, fallback|
-                    heap.allocate_with(layout, false, Heap::options().fallback(fallback))
+                thread::with_lazy(|heap, fallback| {
+                    // SAFETY: this fallback returns an initialized heap.
+                    let options = unsafe { AllocateOptions::new(fallback) };
+                    heap.allocate_with(layout, false, options)
                         .map(|t| core::ptr::NonNull::from_raw_parts(t, layout.size()))
-                )
+                })
             }
 
             #[inline]
             fn allocate_zeroed(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
-                thread::with_lazy(|heap, fallback|
-                    heap.allocate_with(layout, true, Heap::options().fallback(fallback))
+                thread::with_lazy(|heap, fallback| {
+                    // SAFETY: this fallback returns an initialized heap.
+                    let options = unsafe { AllocateOptions::new(fallback) };
+                    heap.allocate_with(layout, true, options)
                         .map(|t| core::ptr::NonNull::from_raw_parts(t, layout.size()))
-                )
+                })
             }
 
             #[inline]
