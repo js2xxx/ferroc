@@ -28,11 +28,7 @@ macro_rules! config_stat {
 macro_rules! config_c {
     ($vis:vis) => {
         #[inline]
-        pub(crate) fn malloc(
-            &self,
-            size: usize,
-            zero: bool,
-        ) -> Result<core::ptr::NonNull<()>, Error> {
+        pub(crate) fn malloc(&self, size: usize, zero: bool) -> Option<core::ptr::NonNull<()>> {
             thread::with_lazy(|heap, fallback| heap.malloc(size, zero, fallback))
         }
 
@@ -71,6 +67,7 @@ macro_rules! config_inner {
         #[doc = concat!("\n\nSee [`Error`](", stringify!($crate), "::arena::Error) for more information.")]
         $vis type Error = $crate::arena::Error<$bt>;
         type ThreadLocal<'arena> = $crate::heap::ThreadLocal<'arena, $bt>;
+        type AllocateOptions<F, E> = $crate::heap::AllocateOptions<F, E>;
     };
     (@ARENA $vis:vis, $bs:expr) => {
         static ARENAS: Arenas = Arenas::new($bs);
@@ -143,7 +140,13 @@ macro_rules! config_inner {
             $vis fn allocate(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<()>, Error>
             {
-                thread::with_lazy(|heap, fallback| heap.allocate_with(layout, fallback))
+                #[allow(dropping_references)]
+                thread::with_lazy(|heap, fallback| {
+                    let mut err = core::mem::MaybeUninit::uninit();
+                    let options = AllocateOptions::new(fallback, |e| drop(err.write(e)));
+                    heap.allocate_with(layout, false, options)
+                        .ok_or_else(|| unsafe { err.assume_init() })
+                })
             }
 
             /// Allocate a zeroed memory block of `layout` from the current heap.
@@ -161,7 +164,13 @@ macro_rules! config_inner {
             $vis fn allocate_zeroed(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<()>, Error>
             {
-                thread::with_lazy(|heap, fallback| heap.allocate_with(layout, fallback))
+                #[allow(dropping_references)]
+                thread::with_lazy(|heap, fallback| {
+                    let mut err = core::mem::MaybeUninit::uninit();
+                    let options = AllocateOptions::new(fallback, |e| drop(err.write(e)));
+                    heap.allocate_with(layout, true, options)
+                        .ok_or_else(|| unsafe { err.assume_init() })
+                })
             }
 
             /// Retrieves the layout information of a specific allocation.
@@ -204,20 +213,24 @@ macro_rules! config_inner {
             fn allocate(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
-                match self.allocate(layout) {
-                    Ok(t) => Ok(core::ptr::NonNull::from_raw_parts(t, layout.size())),
-                    Err(e) => Err((|_| core::alloc::AllocError)(e)),
-                }
+                thread::with_lazy(|heap, fallback|
+                    match heap.allocate_with(layout, false, Heap::options().fallback(fallback)) {
+                        Some(t) => Ok(core::ptr::NonNull::from_raw_parts(t, layout.size())),
+                        None => Err(core::alloc::AllocError)
+                    }
+                )
             }
 
             #[inline]
             fn allocate_zeroed(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
-                match self.allocate_zeroed(layout) {
-                    Ok(t) => Ok(core::ptr::NonNull::from_raw_parts(t, layout.size())),
-                    Err(e) => Err((|_| core::alloc::AllocError)(e)),
-                }
+                thread::with_lazy(|heap, fallback|
+                    match heap.allocate_with(layout, true, Heap::options().fallback(fallback)) {
+                        Some(t) => Ok(core::ptr::NonNull::from_raw_parts(t, layout.size())),
+                        None => Err(core::alloc::AllocError)
+                    }
+                )
             }
 
             #[inline]
@@ -233,14 +246,18 @@ macro_rules! config_inner {
         unsafe impl core::alloc::GlobalAlloc for $name {
             #[inline]
             unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-                self.allocate(layout)
-                    .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
+                thread::with_lazy(|heap, fallback|
+                    heap.allocate_with(layout, false, Heap::options().fallback(fallback))
+                        .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
+                )
             }
 
             #[inline]
             unsafe fn alloc_zeroed(&self, layout: core::alloc::Layout) -> *mut u8 {
-                self.allocate_zeroed(layout)
-                    .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
+                thread::with_lazy(|heap, fallback|
+                    heap.allocate_with(layout, true, Heap::options().fallback(fallback))
+                        .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
+                )
             }
 
             #[inline]
