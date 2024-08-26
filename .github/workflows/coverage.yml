@@ -18,19 +18,20 @@ jobs:
         with:
           components: llvm-tools
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+          cache-directories: |
+            "./fuzz/artifacts"
+            "./fuzz/corpus"
+            "./fuzz/coverage"
+
       - name: Install fuzzing utilities
         run: |
           cargo install cargo-fuzz
           cargo install cargo-binutils
           cargo install rustfilt
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-directories: |
-            "./fuzz/artifacts"
-            "./fuzz/corpus"
-            "./fuzz/coverage"
 
       - name: Set up configuation
         run: |
