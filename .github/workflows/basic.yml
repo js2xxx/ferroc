@@ -62,8 +62,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: clippy, rustfmt
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -78,3 +76,26 @@ jobs:
       - name: Run Valgrind on default
         run: |
           cargo valgrind run --example random2 --release --features track-valgrind
+
+  miri:
+    name: Miri
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Miri on default
+        run: |
+          cargo miri test --tests
+          cargo miri run --example stress
+          cargo miri run --example random2
+        env:
+          MIRIFLAGS: -Zmiri-disable-stacked-borrows

@@ -9,7 +9,10 @@ use std::{
 
 use ferroc::Ferroc;
 
+#[cfg(not(miri))]
 const ALL_ROUND: usize = 10000;
+#[cfg(miri)]
+const ALL_ROUND: usize = 10;
 const THREAD_COUNT: usize = 6;
 const ROUND: usize = ALL_ROUND / THREAD_COUNT;
 
@@ -34,7 +37,7 @@ static FERROC: Ferroc = Ferroc;
 
 fn main() {
     println!("ferroc: {:?}", do_bench(&Ferroc));
-    #[cfg(not(feature = "track-valgrind"))]
+    #[cfg(not(any(feature = "track-valgrind", miri)))]
     println!("system: {:?}", do_bench(&std::alloc::System));
 }
 
@@ -72,6 +75,8 @@ fn bench_one<A: GlobalAlloc>(alloc: &A) -> Duration {
 
     for _ in 0..ROUND {
         for &BenchArg { size, count } in BENCH_ARGS {
+            #[cfg(miri)]
+            let count = (count / 100).max(1);
             for _ in 0..count {
                 memory[index] = unsafe { allocate_one(size, alloc) };
                 index += 1;

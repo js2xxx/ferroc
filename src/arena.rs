@@ -191,9 +191,13 @@ impl<B: BaseAlloc> Arena<B> {
         let ptr = self.allocate_slices(count)?;
 
         let (addr, _) = ptr.to_raw_parts();
-        let commit = unsafe { base.commit(NonNull::from_raw_parts(addr, mem::size_of::<Slab>())) };
+        if let Err(err) =
+            unsafe { base.commit(NonNull::from_raw_parts(addr, mem::size_of::<Slab>())) }
+        {
+            return Some(Err(Error::Commit(err)));
+        }
         // SAFETY: The fresh allocation is aligned to `SLAB_SIZE`.
-        let res = commit.map(|_| unsafe {
+        Some(Ok(unsafe {
             Slab::init(
                 ptr,
                 thread_id,
@@ -201,8 +205,7 @@ impl<B: BaseAlloc> Arena<B> {
                 is_large_or_huge,
                 B::IS_ZEROED,
             )
-        });
-        Some(res.map_err(Error::Commit))
+        }))
     }
 
     /// # Safety
@@ -377,17 +380,19 @@ impl<B: BaseAlloc> Arenas<B> {
             return None;
         }
         next = self.abandoned.load(Relaxed);
-        loop {
+        let ret = loop {
             let ptr = NonNull::new(next)?;
             let new_next = unsafe { (*next.cast::<Slab>()).abandoned_next.load(Relaxed) };
             match self
                 .abandoned
                 .compare_exchange_weak(next, new_next, AcqRel, Acquire)
             {
-                Ok(_) => break Some(unsafe { SlabRef::from_ptr(ptr) }),
+                Ok(_) => break unsafe { SlabRef::from_ptr(ptr) },
                 Err(e) => next = e,
             }
-        }
+        };
+        ret.abandoned_next.store(ptr::null_mut(), Release);
+        Some(ret)
     }
 
     fn try_reclaim(
