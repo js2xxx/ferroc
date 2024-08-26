@@ -41,10 +41,11 @@ pub struct Arena<Os: OsAlloc> {
 
 impl<Os: OsAlloc> Arena<Os> {
     pub fn new(chunk: Chunk<Os>) -> Self {
-        assert!(chunk.layout().size() >= mem::size_of::<AtomicUsize>());
-        assert!(chunk.layout().align() >= mem::align_of::<AtomicUsize>());
         let layout = chunk.layout();
-        let slab_count = layout.size().div_ceil(SLAB_SIZE);
+        assert!(layout.size() >= SLAB_SIZE);
+        assert!(layout.align() % SLAB_SIZE == 0);
+
+        let slab_count = layout.size() / SLAB_SIZE;
 
         let bitmap_size = slab_count.div_ceil(BYTE_WIDTH);
         let bitmap_count = bitmap_size.div_ceil(SLAB_SIZE);
@@ -95,9 +96,10 @@ impl<Os: OsAlloc> Arena<Os> {
         ))
     }
 
-    pub fn allocate(&self, id: u64) -> Option<SlabRef> {
+    pub fn allocate(&self, id: u64, count: usize, align: usize) -> Option<SlabRef> {
+        debug_assert!(align <= SLAB_SIZE);
         // SAFETY: The fresh allocation is aligned to `SLAB_SIZE`.
-        Some(unsafe { Slab::init(self.allocate_slices(1)?, id, Os::IS_ZEROED) })
+        Some(unsafe { Slab::init(self.allocate_slices(count)?, id, Os::IS_ZEROED) })
     }
 
     /// # Safety
