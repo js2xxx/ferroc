@@ -22,7 +22,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Cache fuzzing data
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           key: ${{ runner.os }}-fuzz-${{ hashFiles('./fuzz/corpus/*') }}
           restore-keys: |
@@ -57,7 +57,7 @@ jobs:
             -sources ./src | rustfilt > target/lcov.txt
 
       - name: Upload coverage report
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         with:
           file: ./target/lcov.txt
           fail_ci_if_error: false
