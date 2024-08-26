@@ -164,15 +164,6 @@ add_custom_target(
     COMMENT "Copying libraries to root target directory"
 )
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    add_custom_command(
-        TARGET ferroc-build POST_BUILD
-        COMMAND ${CMAKE_STRIP} ${SHARED_LIB} --strip-unneeded
-        COMMENT "Stripping unneeded symbols from shared library"
-    )
-    message(STATUS "Strip using ${CMAKE_STRIP}")
-endif()
-
 add_library(ferroc SHARED IMPORTED GLOBAL)
 add_dependencies(ferroc ferroc-build)
 set_target_properties(ferroc PROPERTIES IMPORTED_LOCATION ${SHARED_LIB})
