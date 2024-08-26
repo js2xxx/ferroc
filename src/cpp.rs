@@ -4,7 +4,7 @@ use core::{
     ptr::{self, NonNull},
 };
 
-#[cfg(sys_alloc)]
+#[cfg(feature = "c-override")]
 use crate::c::fe_free;
 use crate::Ferroc;
 
@@ -81,7 +81,7 @@ pub unsafe extern "C" fn fe_alloc(size: usize, align: usize) -> *mut c_void {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fe_allocate_nothrow(size: usize, align: usize, _: NoThrow) -> *mut c_void {
+pub unsafe extern "C" fn fe_alloc_nothrow(size: usize, align: usize, _: NoThrow) -> *mut c_void {
     let Ok(layout) = Layout::from_size_align(size, align) else {
         new_handler(true);
         return ptr::null_mut();
@@ -139,9 +139,9 @@ forward! {
     _ZnwmSt11align_val_t(size: usize, align: usize) -> *mut c_void => fe_alloc;
     _ZnamSt11align_val_t(size: usize, align: usize) -> *mut c_void => fe_alloc;
     _ZnwmRKSt11align_val_tS1_St9nothrow_t(size: usize, align: usize, nothrow: NoThrow)
-        -> *mut c_void => fe_allocate_nothrow;
+        -> *mut c_void => fe_alloc_nothrow;
     _ZnamRKSt11align_val_tS1_St9nothrow_t(size: usize, align: usize, nothrow: NoThrow)
-        -> *mut c_void => fe_allocate_nothrow;
+        -> *mut c_void => fe_alloc_nothrow;
 }
 
 #[cfg(target_pointer_width = "32")]
@@ -153,7 +153,7 @@ forward! {
     _ZnwjSt11align_val_t(size: usize, align: usize) -> *mut c_void => fe_alloc;
     _ZnajSt11align_val_t(size: usize, align: usize) -> *mut c_void => fe_alloc;
     _ZnwjRKSt11align_val_tS1_St9nothrow_t(size: usize, align: usize, nothrow: NoThrow)
-        -> *mut c_void => fe_allocate_nothrow;
+        -> *mut c_void => fe_alloc_nothrow;
     _ZnajRKSt11align_val_tS1_St9nothrow_t(size: usize, align: usize, nothrow: NoThrow)
-        -> *mut c_void => fe_allocate_nothrow;
+        -> *mut c_void => fe_alloc_nothrow;
 }

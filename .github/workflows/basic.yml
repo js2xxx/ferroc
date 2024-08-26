@@ -44,14 +44,13 @@ jobs:
           cargo run --release --example random2
 
       - name: Clippy on C dynamic library
-        run: cargo clippy --features c -- -D warnings
-        env:
-          RUSTFLAGS: --cfg sys_alloc
+        run: cargo clippy --features c-override -- -D warnings
 
       - name: Build C dynamic library
-        run: cargo build --release --features c
-        env:
-          RUSTFLAGS: --cfg sys_alloc
+        run: |
+          cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE -S. -Btarget
+          cmake --build target --config Release --target all
 
   valgrind:
     name: Valgrind

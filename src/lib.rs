@@ -125,8 +125,8 @@
 //! Simply enable the `c` feature and compile it, and you can retrieve the
 //! library binary alongside with a `ferroc.h` C/C++ compatible header.
 //!
-//! If you want to replace the default `malloc` implementation, add a `rustc`
-//! flag `--cfg sys_alloc` when compiling.
+//! If you want to replace the default `malloc` implementation, the `c-override`
+//! feature can be enabled.
 #![no_std]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
@@ -155,7 +155,7 @@ extern crate std;
 macro_rules! forward {
     (@IMPL $name:ident($($aname:ident, $atype:ty),*) $(-> $ret:ty)? => $target:ident) => {
         #[no_mangle]
-        #[cfg(sys_alloc)]
+        #[cfg(feature = "c-override")]
         pub unsafe extern "C" fn $name($($aname: $atype),*) $(-> $ret)? {
             $target($($aname),*)
         }
