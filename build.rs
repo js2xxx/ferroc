@@ -1,9 +1,9 @@
 fn main() {
-    #[cfg(feature = "c")]
+    #[cfg(feature = "c-bindgen")]
     generate_c_bindings();
 }
 
-#[cfg(feature = "c")]
+#[cfg(feature = "c-bindgen")]
 fn generate_c_bindings() {
     let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     cbindgen::Builder::new()

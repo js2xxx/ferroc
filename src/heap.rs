@@ -615,7 +615,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     }
 
     #[cfg(feature = "c")]
-    pub(crate) unsafe fn malloc<'a>(
+    #[doc(hidden)]
+    pub unsafe fn malloc<'a>(
         &'a self,
         size: usize,
         zero: bool,
@@ -812,7 +813,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     ///   same arena.
     /// - No aliases of `ptr` should exist after the deallocation.
     /// - The allocation size must not be 0.
-    pub(crate) unsafe fn free(&self, ptr: NonNull<u8>) {
+    #[doc(hidden)]
+    pub unsafe fn free(&self, ptr: NonNull<u8>) {
         #[cfg(debug_assertions)]
         if let Some(cx) = self.cx
             && !cx.arena.check_ptr(ptr)
