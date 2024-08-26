@@ -7,7 +7,7 @@ use core::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
     ptr::{self, addr_of_mut, NonNull},
-    sync::atomic::{AtomicPtr, AtomicUsize, Ordering::*},
+    sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering::*},
 };
 
 use self::cell_link::{CellLink, CellLinked, CellList};
@@ -162,19 +162,23 @@ impl<'a> Slab<'a> {
         let (shard, index) = unsafe { Self::shard_meta(this, ptr) };
         debug_assert!(index >= Self::HEADER_COUNT);
 
-        // SAFETY: `this` is valid.
-        let area = unsafe { Self::shard_area(this, index) };
-
         // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
         // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
         let obj_size = unsafe { (*ptr::addr_of!((*shard.as_ptr()).obj_size)).load(Relaxed) };
 
-        let ptr = area.cast::<()>().map_addr(|addr| {
-            let offset = ptr.addr().get() - addr.get();
-            // SAFETY: `addr` is not zero, and offset is decreased, so the result is not
-            // zero.
-            unsafe { NonZeroUsize::new_unchecked(addr.get() + (offset - offset % obj_size)) }
-        });
+        let ptr = if !unsafe { (*ptr::addr_of!((*shard.as_ptr()).has_aligned)).load(Relaxed) } {
+            ptr
+        } else {
+            // SAFETY: `this` is valid.
+            let area = unsafe { Self::shard_area(this, index) };
+
+            area.cast::<()>().map_addr(|addr| {
+                let offset = ptr.addr().get() - addr.get();
+                // SAFETY: `addr` is not zero, and offset is decreased, so the result is not
+                // zero.
+                unsafe { NonZeroUsize::new_unchecked(addr.get() + (offset - offset % obj_size)) }
+            })
+        };
 
         (shard, unsafe { BlockRef::from_raw(ptr) }, obj_size)
     }
@@ -235,9 +239,10 @@ pub(crate) struct Shard<'a> {
     local_free: Cell<Option<BlockRef<'a>>>,
     used: Cell<usize>,
     pub(crate) is_in_full: Cell<bool>,
+    pub(crate) has_aligned: AtomicBool,
     free_is_zero: Cell<bool>,
 
-    pub(crate) thread_free: AtomicBlockRef<'a>,
+    thread_free: AtomicBlockRef<'a>,
 }
 
 impl<'a> PartialEq for &'a Shard<'a> {
@@ -432,6 +437,7 @@ impl<'a> Shard<'a> {
 
         self.obj_size.store(size, Relaxed);
         self.cap_limit.set(1);
+        self.has_aligned.store(false, Relaxed);
         self.extend_count(1);
     }
 
@@ -451,6 +457,7 @@ impl<'a> Shard<'a> {
 
         let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
         self.cap_limit.set(SHARD_SIZE / obj_size);
+        self.has_aligned.store(false, Relaxed);
 
         if old_obj_size != obj_size {
             self.capacity.set(0);
@@ -543,6 +550,6 @@ impl<'a> BlockRef<'a> {
 /// An atomic slot containing an `Option<Block<'a>>`.
 #[derive(Default)]
 #[repr(transparent)]
-pub(crate) struct AtomicBlockRef<'a>(AtomicPtr<()>, PhantomData<&'a ()>);
+struct AtomicBlockRef<'a>(AtomicPtr<()>, PhantomData<&'a ()>);
 
 impl<'a> AtomicBlockRef<'a> {}
