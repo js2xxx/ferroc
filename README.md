@@ -85,6 +85,7 @@ fn main() {
 Using a subset of [`mimalloc-bench`](https://github.com/daanx/mimalloc-bench) for benchmarking. Running on my laptop with 16GB of RAM and an Intel i7-10750H CPU @ 2.60GHz. The process is repeated 10 times and the results are averaged and taken as logarithms.
 
 Time consumed:
+
 ![Time consumed #1](./assets/time1.svg)
 ![Time consumed #2](./assets/time2.svg)
 ![Time consumed #3](./assets/time3.svg)
@@ -92,6 +93,7 @@ Time consumed:
 ![Time consumed #5](./assets/time5.svg)
 
 Memory consumed:
+
 ![Memory consumed #1](./assets/memory1.svg)
 ![Memory consumed #2](./assets/memory2.svg)
 ![Memory consumed #3](./assets/memory3.svg)
