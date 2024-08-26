@@ -19,7 +19,6 @@ use self::{
 use crate::{
     arena::{Error, SHARD_COUNT, SHARD_SIZE, SLAB_SIZE},
     base::BaseAlloc,
-    Stat,
 };
 
 /// A big, sharded chunk of memory.
@@ -582,14 +581,9 @@ impl<'a> Shard<'a> {
         obj_size: usize,
         slab_count: NonZeroUsize,
         base: &B,
-        _stat: &mut Stat,
     ) -> Result<(), Error<B>> {
         debug_assert!(obj_size > SHARD_SIZE);
 
-        #[cfg(feature = "stat")]
-        {
-            _stat.shards += 1;
-        }
         let (slab, _) = self.slab();
         slab.used.set(slab.used.get() + 1);
 
@@ -620,12 +614,11 @@ impl<'a> Shard<'a> {
         &self,
         obj_size: usize,
         base: &B,
-        _stat: &mut Stat,
     ) -> Result<Option<&'a Shard<'a>>, Error<B>> {
         debug_assert!(obj_size <= SLAB_SIZE / 2);
 
         if obj_size > SHARD_SIZE {
-            self.init_large_or_huge(obj_size, NonZeroUsize::MIN, base, _stat)?;
+            self.init_large_or_huge(obj_size, NonZeroUsize::MIN, base)?;
             return Ok(None);
         }
 
@@ -636,11 +629,6 @@ impl<'a> Shard<'a> {
         let next_shard = (shard_count > 0)
             .then(|| &slab.shards[index + 1])
             .inspect(|next_shard| next_shard.shard_count.set(shard_count));
-
-        #[cfg(feature = "stat")]
-        {
-            _stat.shards += 1;
-        }
 
         let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
         let cap_limit = SHARD_SIZE / obj_size;
@@ -667,23 +655,15 @@ impl<'a> Shard<'a> {
         Ok(next_shard)
     }
 
-    pub(crate) fn fini(&self, _stat: &mut Stat) -> Result<Option<&Self>, SlabRef> {
+    pub(crate) fn fini(&self) -> Result<Option<&Self>, SlabRef> {
         debug_assert!(!self.link.is_linked());
 
         let (slab, _) = self.slab();
         if self.is_unused() {
             slab.used.set(slab.used.get() - 1);
             self.cap_limit.set(0);
-            #[cfg(feature = "stat")]
-            {
-                _stat.shards -= 1;
-            }
         } else {
             slab.abandoned.set(slab.abandoned.get() + 1);
-            #[cfg(feature = "stat")]
-            {
-                _stat.abandoned_shards += 1;
-            }
         }
 
         if slab.abandoned.get() != slab.used.get() {

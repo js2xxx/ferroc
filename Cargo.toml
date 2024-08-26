@@ -23,7 +23,6 @@ default = ["global", "base-mmap", "base-static", "libc"]
 finer-grained = []
 global = []
 libc = ["dep:libc"]
-stat = []
 track-valgrind = ["dep:crabgrind"]
 
 [dependencies]
