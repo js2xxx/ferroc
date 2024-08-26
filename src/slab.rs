@@ -58,7 +58,8 @@ impl<'a> SlabRef<'a> {
 /// ownership rules.
 // #[repr(align(4194304))] // SLAB_SIZE
 pub struct Slab<'a> {
-    pub(super) id: u64,
+    pub(super) thread_id: u64,
+    pub(super) arena_id: usize,
     size: usize,
     used: Cell<usize>,
     shards: [Shard<'a>; SHARD_COUNT],
@@ -137,13 +138,19 @@ impl<'a> Slab<'a> {
     ///
     /// `ptr` must be properly aligned to [`SLAB_SIZE`], and owns a freshly
     /// allocated block of memory sized `SLAB_SIZE`.
-    pub unsafe fn init(ptr: NonNull<[u8]>, id: u64, free_is_zero: bool) -> SlabRef<'a> {
+    pub unsafe fn init(
+        ptr: NonNull<[u8]>,
+        thread_id: u64,
+        arena_id: usize,
+        free_is_zero: bool,
+    ) -> SlabRef<'a> {
         let slab = ptr.cast::<Self>().as_ptr();
         let header_count =
             mem::size_of_val(ptr.cast::<Self>().as_uninit_ref()).div_ceil(SHARD_SIZE);
         assert_eq!(header_count, Self::HEADER_COUNT);
 
-        addr_of_mut!((*slab).id).write(id);
+        addr_of_mut!((*slab).thread_id).write(thread_id);
+        addr_of_mut!((*slab).arena_id).write(arena_id);
         addr_of_mut!((*slab).size).write(ptr.len());
         addr_of_mut!((*slab).used).write(Cell::new(0));
 

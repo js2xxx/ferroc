@@ -4,7 +4,7 @@
 use std::alloc::Layout;
 
 use ferroc::{
-    arena::Arena,
+    arena::Arenas,
     heap::{Context, Heap},
     MmapAlloc,
 };
@@ -17,7 +17,7 @@ enum Action {
 }
 
 fuzz_target!(|actions: Vec<Action>| {
-    let arena = Arena::new(MmapAlloc, 3).unwrap();
+    let arena = Arenas::new(MmapAlloc);
     let cx = Context::new(&arena);
     let heap = Heap::new(&cx);
 
@@ -31,7 +31,7 @@ fuzz_target!(|actions: Vec<Action>| {
                 // eprintln!("actual size = {size:#x}, align = {align:#x}");
 
                 let layout = Layout::from_size_align(size as usize, align).unwrap();
-                if let Some(ptr) = heap.allocate(layout) {
+                if let Ok(ptr) = heap.allocate(layout) {
                     unsafe { ptr.as_uninit_slice_mut()[size as usize / 2].write(align_shift % 16) };
                     allocations.push((ptr, layout));
                 }
