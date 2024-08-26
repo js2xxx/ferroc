@@ -21,7 +21,7 @@ jobs:
       - name: Install fuzzing utilities
         run: |
           cargo install cargo-fuzz
-          cargo install cargo-cov
+          cargo install cargo-binutils
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
