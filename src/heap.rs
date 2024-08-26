@@ -595,7 +595,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             if is_unused || was_full {
                 let obj_size = shard.obj_size.load(Relaxed);
                 if let Small | Medium | Large = obj_size_type(obj_size) {
-                    let index = obj_size_index(obj_size);
+                    let list = &self.shards[obj_size_index(obj_size)];
                     #[cfg(feature = "stat")]
                     {
                         stat.normal_count[index] -= 1;
@@ -605,11 +605,11 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                     if was_full {
                         let _ret = self.full_shards.remove(shard);
                         debug_assert!(_ret);
-                        self.shards[index].push(shard);
+                        list.push(shard);
                     }
 
-                    if is_unused && self.shards[index].len() > 1 {
-                        let _ret = self.shards[index].remove(shard);
+                    if is_unused && list.len() > 1 {
+                        let _ret = list.remove(shard);
                         debug_assert!(_ret);
                         self.cx.finalize_shard(shard, &mut stat);
                     }

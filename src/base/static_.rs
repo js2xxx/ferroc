@@ -74,7 +74,7 @@ impl<const HEADER_CAP: usize> Static<HEADER_CAP> {
             let new = NonNull::new(top.with_addr(aligned))?;
             match self
                 .top
-                .compare_exchange(top, top.with_addr(end), AcqRel, Acquire)
+                .compare_exchange_weak(top, top.with_addr(end), AcqRel, Acquire)
             {
                 // SAFETY: The returned pointer points to an owned memory block of `layout` within
                 // the range of `self.memory`.

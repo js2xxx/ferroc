@@ -236,6 +236,7 @@ pub struct Arenas<B: BaseAlloc> {
     arena_count: AtomicUsize,
     // slab_count: AtomicUsize,
     abandoned: AtomicPtr<()>,
+    abandoned_visited: AtomicPtr<()>,
 }
 
 impl<B: BaseAlloc> Arenas<B> {
@@ -252,6 +253,7 @@ impl<B: BaseAlloc> Arenas<B> {
             arena_count: AtomicUsize::new(0),
             // slab_count: AtomicUsize::new(0),
             abandoned: AtomicPtr::new(ptr::null_mut()),
+            abandoned_visited: AtomicPtr::new(ptr::null_mut()),
         }
     }
 
@@ -299,24 +301,121 @@ impl<B: BaseAlloc> Arenas<B> {
         let mut next = self.abandoned.load(Relaxed);
         loop {
             slab.abandoned_next.store(next, Relaxed);
-            match self
-                .abandoned
-                .compare_exchange(next, slab.as_ptr().as_ptr(), AcqRel, Acquire)
-            {
+            match self.abandoned.compare_exchange_weak(
+                next,
+                slab.as_ptr().as_ptr(),
+                AcqRel,
+                Acquire,
+            ) {
                 Ok(_) => break,
                 Err(e) => next = e,
             }
         }
     }
 
-    pub(crate) fn collect_abandoned(&self) {
-        let mut next = self.abandoned.swap(ptr::null_mut(), Relaxed);
-        // SAFETY: `pointer` is owned: abandoned slabs comes from a dead thread context.
-        while let Some(slab) = NonNull::new(next).map(|p| unsafe { SlabRef::from_ptr(p) }) {
-            next = slab.abandoned_next.load(Relaxed);
-            slab.collect_abandoned();
-            unsafe { self.deallocate(slab) };
+    fn push_abandoned_visited(&self, slab: SlabRef) {
+        debug_assert!(slab.is_abandoned());
+        let mut next = self.abandoned_visited.load(Relaxed);
+        loop {
+            slab.abandoned_next.store(next, Relaxed);
+            match self.abandoned_visited.compare_exchange_weak(
+                next,
+                slab.as_ptr().as_ptr(),
+                AcqRel,
+                Acquire,
+            ) {
+                Ok(_) => break,
+                Err(e) => next = e,
+            }
         }
+    }
+
+    fn reappend_abandoned_visited(&self) -> bool {
+        if self.abandoned_visited.load(Relaxed).is_null() {
+            return false;
+        }
+        let first = self.abandoned_visited.swap(ptr::null_mut(), AcqRel);
+        if first.is_null() {
+            return false;
+        };
+
+        if self.abandoned.load(Relaxed).is_null()
+            && self
+                .abandoned
+                .compare_exchange(ptr::null_mut(), first, AcqRel, Acquire)
+                .is_ok()
+        {
+            return true;
+        }
+
+        let mut last = first;
+        let last = loop {
+            let next = unsafe { (*last.cast::<Slab>()).abandoned_next.load(Relaxed) };
+            last = match next.is_null() {
+                true => break last,
+                false => next,
+            };
+        };
+
+        let mut next = self.abandoned.load(Relaxed);
+        loop {
+            unsafe { (*last.cast::<Slab>()).abandoned_next.store(next, Relaxed) };
+            match self
+                .abandoned
+                .compare_exchange_weak(next, first, AcqRel, Acquire)
+            {
+                Ok(_) => break,
+                Err(e) => next = e,
+            }
+        }
+
+        true
+    }
+
+    fn pop_abandoned(&self) -> Option<SlabRef> {
+        let mut next = self.abandoned.load(Relaxed);
+        if next.is_null() && !self.reappend_abandoned_visited() {
+            return None;
+        }
+        next = self.abandoned.load(Relaxed);
+        loop {
+            let ptr = NonNull::new(next)?;
+            let new_next = unsafe { (*next.cast::<Slab>()).abandoned_next.load(Relaxed) };
+            match self
+                .abandoned
+                .compare_exchange_weak(next, new_next, AcqRel, Acquire)
+            {
+                Ok(_) => break Some(unsafe { SlabRef::from_ptr(ptr) }),
+                Err(e) => next = e,
+            }
+        }
+    }
+
+    fn try_reclaim(
+        &self,
+        thread_id: u64,
+        count: usize,
+        align: usize,
+        is_large_or_huge: bool,
+    ) -> Option<SlabRef> {
+        const MAX_TRIAL: usize = 8;
+        let mut trial = MAX_TRIAL;
+        while trial > 0
+            && let Some(slab) = self.pop_abandoned()
+        {
+            if slab.collect_abandoned()
+                && slab.size >= count * SLAB_SIZE
+                && slab.as_ptr().is_aligned_to(align)
+            {
+                let aid = slab.arena_id;
+                let raw = slab.into_raw();
+                let slab = unsafe { Slab::init(raw, thread_id, aid, is_large_or_huge, false) };
+                return Some(slab);
+            }
+            self.push_abandoned_visited(slab);
+            trial -= 1;
+        }
+        None
     }
 
     fn all_arenas(&self) -> impl Iterator<Item = (usize, &Arena<B>)> {
@@ -367,24 +466,22 @@ impl<B: BaseAlloc> Arenas<B> {
     ) -> Result<SlabRef, Error<B>> {
         let count = count.get();
 
-        let mut retry = 0;
-        let ret = loop {
-            self.collect_abandoned();
-            match self.arenas(false).find_map(|(_, arena)| {
+        let reclaimed = self.try_reclaim(thread_id, count, align, is_large_or_huge);
+        let ret = match reclaimed.map(Ok).or_else(|| {
+            self.arenas(false).find_map(|(_, arena)| {
                 arena.allocate(thread_id, count, align, is_large_or_huge, &self.base)
-            }) {
-                Some(slab) => break slab?,
-                None if retry < 3 => retry += 1,
-                None => {
-                    const MIN_RESERVE_COUNT: usize = 32;
+            })
+        }) {
+            Some(slab) => slab?,
+            None => {
+                const MIN_RESERVE_COUNT: usize = 32;
 
-                    let reserve_count = count.max(MIN_RESERVE_COUNT)
+                let reserve_count = count.max(MIN_RESERVE_COUNT)
                         /* .max(self.slab_count.load(Relaxed).isqrt()) */;
-                    let arena = Arena::new(&self.base, reserve_count, Some(align), false)?;
-                    let arena = self.push_arena(arena)?;
-                    let res = arena.allocate(thread_id, count, align, is_large_or_huge, &self.base);
-                    break res.unwrap()?;
-                }
+                let arena = Arena::new(&self.base, reserve_count, Some(align), false)?;
+                let arena = self.push_arena(arena)?;
+                let res = arena.allocate(thread_id, count, align, is_large_or_huge, &self.base);
+                res.unwrap()?
             }
         };
         // self.slab_count.fetch_add(count, Relaxed);
