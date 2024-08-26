@@ -26,13 +26,14 @@ fuzz_target!(|actions: Vec<Action>| {
     for action in actions {
         match action {
             Action::Allocate { size, align_shift } => {
-                let size = size % 131072 + 1;
-                let align = 1 << (align_shift % 16);
+                let align_shift = align_shift % 21;
+                let size = size % 262144 + 1;
+                let align = 1 << align_shift;
                 // eprintln!("actual size = {size:#x}, align = {align:#x}");
 
                 let layout = Layout::from_size_align(size as usize, align).unwrap();
                 if let Ok(ptr) = heap.allocate(layout) {
-                    unsafe { ptr.as_uninit_slice_mut()[size as usize / 2].write(align_shift % 16) };
+                    unsafe { ptr.as_uninit_slice_mut()[size as usize / 2].write(align_shift) };
                     allocations.push((ptr, layout));
                 }
             }
