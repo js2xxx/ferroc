@@ -5,10 +5,13 @@ use core::{
     ptr::{self, NonNull},
 };
 
+#[cfg(feature = "stat")]
+use crate::stat::Stat;
+
 pub type Base = crate::base::MmapAlloc;
 
-pub type Heap<'a> = crate::heap::Heap<'a, Base>;
-pub type Context<'a> = crate::heap::Context<'a, Base>;
+pub type Heap<'arena, 'cx> = crate::heap::Heap<'arena, 'cx, Base>;
+pub type Context<'arena> = crate::heap::Context<'arena, Base>;
 pub type Arenas = crate::arena::Arenas<Base>;
 pub type Error = crate::arena::Error<Base>;
 
@@ -20,6 +23,11 @@ pub struct Ferroc;
 impl Ferroc {
     pub fn collect(&self, force: bool) {
         thread::with(|heap| heap.collect(force))
+    }
+
+    #[cfg(feature = "stat")]
+    pub fn stat(&self) -> Stat {
+        thread::with(|heap| heap.stat())
     }
 
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, Error> {

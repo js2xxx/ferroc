@@ -11,7 +11,10 @@ use core::{
 };
 
 use self::cell_link::{CellLink, CellLinked, CellList};
-use crate::arena::{SHARD_COUNT, SHARD_SIZE, SLAB_SIZE};
+use crate::{
+    arena::{SHARD_COUNT, SHARD_SIZE, SLAB_SIZE},
+    Stat,
+};
 
 /// A big, sharded chunk of memory.
 ///
@@ -254,6 +257,10 @@ impl<'a> Shard<'a> {
         }
     }
 
+    pub(crate) fn shard_count(&self) -> usize {
+        self.shard_count.get()
+    }
+
     pub(crate) fn is_unused(&self) -> bool {
         self.used.get() == 0
     }
@@ -289,9 +296,8 @@ impl<'a> Shard<'a> {
     pub(crate) fn push_block(&self, mut block: BlockRef<'a>) -> bool {
         block.next = self.local_free.take();
         self.local_free.set(Some(block));
-        let used = self.used.get() - 1;
-        self.used.set(used);
-        used == 0
+        self.used.set(self.used.get() - 1);
+        self.used.get() == 0
     }
 
     /// This method don't update the usage of the shard, which will be updated
@@ -412,21 +418,30 @@ impl<'a> Shard<'a> {
         self.extend_count(limit.min(delta))
     }
 
-    pub(crate) fn init_huge(&self, size: usize) {
+    pub(crate) fn init_huge(&self, size: usize, _stat: &mut Stat) {
         debug_assert!(size > SHARD_SIZE);
 
         let (slab, _) = self.slab();
-
         slab.used.set(slab.used.get() + 1);
+        #[cfg(feature = "stat")]
+        {
+            _stat.shards += 1;
+        }
+
         self.obj_size.store(size, Relaxed);
         self.cap_limit.set(1);
         self.extend_count(1);
     }
 
-    pub(crate) fn init(&self, obj_size: usize) -> Option<&'a Shard<'a>> {
+    pub(crate) fn init(&self, obj_size: usize, _stat: &mut Stat) -> Option<&'a Shard<'a>> {
         debug_assert!(obj_size <= SHARD_SIZE);
 
         let (slab, index) = self.slab();
+        slab.used.set(slab.used.get() + 1);
+        #[cfg(feature = "stat")]
+        {
+            _stat.shards += 1;
+        }
 
         let shard_count = self.shard_count.replace(1) - 1;
         let next_shard = (shard_count > 0).then(|| {
@@ -435,13 +450,14 @@ impl<'a> Shard<'a> {
             next_shard
         });
 
-        slab.used.set(slab.used.get() + 1);
         let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
         self.cap_limit.set(SHARD_SIZE / obj_size);
 
         if old_obj_size != obj_size {
+            self.capacity.set(0);
             self.free.set(None);
             self.local_free.set(None);
+            self.used.set(0);
             if old_obj_size != 0 {
                 self.free_is_zero.set(false);
             }
@@ -451,13 +467,21 @@ impl<'a> Shard<'a> {
         next_shard
     }
 
-    pub(crate) fn fini(&self) -> Result<Option<&Self>, SlabRef> {
+    pub(crate) fn fini(&self, _stat: &mut Stat) -> Result<Option<&Self>, SlabRef> {
         let (slab, _) = self.slab();
         if self.is_unused() {
             slab.used.set(slab.used.get() - 1);
             self.cap_limit.set(0);
+            #[cfg(feature = "stat")]
+            {
+                _stat.shards -= 1;
+            }
         } else {
             slab.abandoned.set(slab.abandoned.get() + 1);
+            #[cfg(feature = "stat")]
+            {
+                _stat.abandoned_shards += 1;
+            }
         }
 
         if slab.abandoned.get() != slab.used.get() {
