@@ -662,7 +662,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             if is_unused || was_full {
                 let obj_size = shard.obj_size.load(Relaxed);
                 if let Small | Medium | Large = obj_size_type(obj_size) {
-                    let list = &self.shards[obj_size_index(obj_size)];
+                    let index = obj_size_index(obj_size);
+                    let list = &self.shards[index];
                     #[cfg(feature = "stat")]
                     {
                         stat.normal_count[index] -= 1;
