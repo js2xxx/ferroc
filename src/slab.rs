@@ -155,7 +155,7 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
         let index = (ptr.addr().get() - this.addr().get()) / SHARD_SIZE;
         let shard = shards.cast::<Shard<'a>>().add(index);
         let primary_offset = unsafe { (*ptr::addr_of!((*shard).primary_offset)).get() };
-        let primary_shard = unsafe { shard.byte_sub(primary_offset) };
+        let primary_shard = unsafe { shard.byte_sub(primary_offset as usize) };
         unsafe { NonNull::new_unchecked(primary_shard.cast_mut()) }
     }
 
@@ -381,25 +381,23 @@ impl ShardFlags {
 /// This structure cannot be used directly on stack, and must only be referenced
 /// from [`Slab`].
 #[derive(Default)]
-#[repr(align(128))]
 pub(crate) struct Shard<'a> {
     header: ShardHeader<'a>,
 
     link: CellLink<'a, Self>,
-    shard_count: Cell<usize>,
-    primary_offset: Cell<usize>,
+    shard_count: Cell<u32>,
+    primary_offset: Cell<u32>,
     is_committed: Cell<bool>,
 
     pub(crate) obj_size: AtomicUsize,
-    cap_limit: Cell<usize>,
-    capacity: Cell<usize>,
-
-    free: Cell<Option<BlockRef<'a>>>,
-    local_free: Cell<Option<BlockRef<'a>>>,
-    used: Cell<usize>,
+    capacity: Cell<u16>,
+    cap_limit: Cell<u16>,
+    used: Cell<u32>,
     pub(crate) flags: ShardFlags,
     free_is_zero: Cell<bool>,
 
+    free: Cell<Option<BlockRef<'a>>>,
+    local_free: Cell<Option<BlockRef<'a>>>,
     thread_free: AtomicBlockRef<'a>,
     delayed_free: AtomicPtr<AtomicBlockRef<'a>>,
 }
@@ -418,6 +416,10 @@ impl<'a> Shard<'a> {
         shard_count: usize,
         free_is_zero: bool,
     ) -> Self {
+        let primary_offset = (index - start_index) * mem::size_of::<Self>();
+
+        debug_assert!(shard_count <= u32::MAX as usize);
+        debug_assert!(primary_offset <= u32::MAX as usize);
         Shard {
             header: ShardHeader {
                 #[cfg(miri)]
@@ -425,8 +427,8 @@ impl<'a> Shard<'a> {
                 shard_area: Slab::shard_area(slab, index),
                 marker: PhantomData,
             },
-            shard_count: Cell::new(shard_count),
-            primary_offset: Cell::new((index - start_index) * mem::size_of::<Self>()),
+            shard_count: Cell::new(shard_count as u32),
+            primary_offset: Cell::new(primary_offset as u32),
             free_is_zero: Cell::new(free_is_zero),
             ..Default::default()
         }
@@ -777,14 +779,19 @@ impl<'a> Shard<'a> {
         });
         self.free.set(last);
 
-        self.capacity.set(capacity + count);
+        // capacity + count <= cap_limit <= u16::MAX.
+        self.capacity.set((capacity + count) as u16);
         true
     }
 
     #[inline]
     pub(crate) fn extend(&self, obj_size: usize) -> bool {
         debug_assert_eq!(obj_size, self.obj_size.load(Relaxed));
-        self.extend_inner(obj_size, self.capacity.get(), self.cap_limit.get())
+        self.extend_inner(
+            obj_size,
+            self.capacity.get().into(),
+            self.cap_limit.get().into(),
+        )
     }
 
     pub(crate) fn init_large_or_huge<B: BaseAlloc + 'a>(
@@ -801,9 +808,12 @@ impl<'a> Shard<'a> {
         debug_assert_eq!(self.primary_offset.get(), 0);
 
         self.obj_size.store(obj_size, Relaxed);
+
         let usable_size = SLAB_SIZE * slab_count.get() - SHARD_SIZE * Slab::<B>::HEADER_COUNT;
         let cap_limit = usable_size / obj_size;
-        self.cap_limit.set(cap_limit);
+        debug_assert!(cap_limit <= u16::MAX.into());
+        self.cap_limit.set(cap_limit as u16);
+
         self.flags.reset();
         self.delayed_free.store(delayed_free.as_ptr(), Release);
         self.set_delayed_tag(VACANT, usize::MAX);
@@ -843,7 +853,7 @@ impl<'a> Shard<'a> {
         slab.used.set(slab.used.get() + 1);
         self.primary_offset.set(0);
         let shard_count = self.shard_count.replace(1) - 1;
-        debug_assert!(shard_count + index < SHARD_COUNT);
+        debug_assert!(shard_count as usize + index < SHARD_COUNT);
         let next_shard = (shard_count > 0).then(|| &slab.shards[index + 1]);
         let next_shard = next_shard.inspect(|next_shard| {
             next_shard.primary_offset.set(0);
@@ -851,9 +861,12 @@ impl<'a> Shard<'a> {
         });
 
         let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
+
         let cap_limit = SHARD_SIZE / obj_size;
         debug_assert!(cap_limit > 1);
-        self.cap_limit.set(cap_limit);
+        debug_assert!(cap_limit <= u16::MAX.into());
+        self.cap_limit.set(cap_limit as u16);
+
         self.flags.reset();
         self.delayed_free.store(delayed_free.as_ptr(), Release);
         self.set_delayed_tag(VACANT, usize::MAX);
