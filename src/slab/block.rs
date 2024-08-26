@@ -28,8 +28,8 @@ impl<'a> BlockRef<'a> {
         self.0
     }
 
-    pub(crate) fn as_ptr(&self) -> *mut () {
-        self.0.as_ptr()
+    pub(crate) fn as_ptr(&self) -> NonNull<()> {
+        self.0
     }
 
     /// # Safety
@@ -97,14 +97,14 @@ impl Drop for BlockRef<'_> {
 /// An atomic slot containing an `Option<Block<'a>>`.
 #[derive(Default)]
 #[repr(transparent)]
-pub(super) struct AtomicBlockRef<'a>(AtomicPtr<()>, PhantomData<&'a ()>);
+pub(crate) struct AtomicBlockRef<'a>(AtomicPtr<()>, PhantomData<&'a ()>);
 
 impl<'a> AtomicBlockRef<'a> {
-    pub(super) const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         AtomicBlockRef(AtomicPtr::new(ptr::null_mut()), PhantomData)
     }
 
-    pub(super) fn get(&self) -> &AtomicPtr<()> {
+    pub(crate) fn get(&self) -> &AtomicPtr<()> {
         &self.0
     }
 }
