@@ -90,6 +90,10 @@ impl<'a> Slab<'a> {
         self.abandoned.get() == self.used.get() && self.abandoned.get() > 0
     }
 
+    pub(crate) fn inc_used(&self) {
+        self.used.set(self.used.get() + 1);
+    }
+
     fn shards(&self) -> impl Iterator<Item = &Shard<'a>> {
         let inner = self.shards[Self::HEADER_COUNT..].iter();
         inner.take_while(|shard| shard.shard_count.get() > 0)
@@ -421,8 +425,6 @@ impl<'a> Shard<'a> {
     pub(crate) fn init_huge(&self, size: usize, _stat: &mut Stat) {
         debug_assert!(size > SHARD_SIZE);
 
-        let (slab, _) = self.slab();
-        slab.used.set(slab.used.get() + 1);
         #[cfg(feature = "stat")]
         {
             _stat.shards += 1;
@@ -437,18 +439,15 @@ impl<'a> Shard<'a> {
         debug_assert!(obj_size <= SHARD_SIZE);
 
         let (slab, index) = self.slab();
-        slab.used.set(slab.used.get() + 1);
         #[cfg(feature = "stat")]
         {
             _stat.shards += 1;
         }
 
         let shard_count = self.shard_count.replace(1) - 1;
-        let next_shard = (shard_count > 0).then(|| {
-            let next_shard = &slab.shards[index + 1];
-            next_shard.shard_count.set(shard_count);
-            next_shard
-        });
+        let next_shard = (shard_count > 0)
+            .then(|| &slab.shards[index + 1])
+            .inspect(|next_shard| next_shard.shard_count.set(shard_count));
 
         let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
         self.cap_limit.set(SHARD_SIZE / obj_size);

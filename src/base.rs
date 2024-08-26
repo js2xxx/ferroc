@@ -1,7 +1,7 @@
-#[cfg(feature = "base-static")]
-mod static_;
 #[cfg(feature = "base-mmap")]
 mod mmap;
+#[cfg(feature = "base-static")]
+mod static_;
 
 use core::{
     alloc::{AllocError, Allocator, Layout},
@@ -9,10 +9,10 @@ use core::{
     ptr::NonNull,
 };
 
-#[cfg(feature = "base-static")]
-pub use self::static_::Static;
 #[cfg(feature = "base-mmap")]
 pub use self::mmap::MmapAlloc;
+#[cfg(feature = "base-static")]
+pub use self::static_::Static;
 
 /// A static memory handle, unable to be deallocated any longer.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
