@@ -23,16 +23,14 @@ mod test {
     use core::{alloc::Allocator, iter};
 
     use crate::{
-        arena::{slab_layout, Arena, SHARD_SIZE, SLAB_SIZE},
+        arena::{Arena, SHARD_SIZE, SLAB_SIZE},
         heap::{Context, Heap},
-        os::OsAlloc,
         MmapAlloc,
     };
 
     #[test]
     fn basic() {
-        let chunk = MmapAlloc.allocate(slab_layout(2)).unwrap();
-        let arena = Arena::new(chunk);
+        let arena = Arena::new(MmapAlloc, 3).unwrap();
         let cx = Context::new(&arena);
         let heap = Heap::new(&cx);
 
@@ -45,8 +43,7 @@ mod test {
 
     #[test]
     fn siufeh() {
-        let chunk = MmapAlloc.allocate(slab_layout(3)).unwrap();
-        let arena = Arena::new(chunk);
+        let arena = Arena::new(MmapAlloc, 3).unwrap();
         let cx = Context::new(&arena);
         let heap = Heap::new(&cx);
 
@@ -58,8 +55,7 @@ mod test {
 
     #[test]
     fn huge() {
-        let chunk = MmapAlloc.allocate(slab_layout(3)).unwrap();
-        let arena = Arena::new(chunk);
+        let arena = Arena::new(MmapAlloc, 3).unwrap();
         let cx = Context::new(&arena);
         let heap = Heap::new(&cx);
 
