@@ -68,7 +68,7 @@ jobs:
             -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/stress \
             -sources ./src | rustfilt > target/lcov.txt
         env:
-          RUSTFLAGS: -Cdebug=true
+          RUSTFLAGS: -Cdebuginfo=2
         continue-on-error: true
 
       - name: Save fuzzing data
