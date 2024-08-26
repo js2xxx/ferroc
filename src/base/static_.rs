@@ -53,6 +53,10 @@ unsafe impl<const HEADER_CAP: usize> Sync for Static<HEADER_CAP> {}
 
 impl<const HEADER_CAP: usize> Static<HEADER_CAP> {
     /// The initialization constant. Equivalent to [`Self::new`].
+    ///
+    /// Note that this constant is not a default static variable, and shouldn't
+    /// be used other than initialization.
+    #[allow(clippy::declare_interior_mutable_const)]
     pub const INIT: Self = Self::new();
 
     /// Creates a new base allocator that allocates static memory only.
