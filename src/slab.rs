@@ -365,24 +365,23 @@ impl<'a> Shard<'a> {
     }
 
     pub(crate) fn pop_block(&self) -> Option<(BlockRef<'a>, bool)> {
-        self.free.take().map(|mut block| {
-            self.used.set(self.used.get() + 1);
-            self.free.set(block.take_next());
-            (block, self.free_is_zero.get())
-        })
+        let mut block = unsafe { ptr::read(self.free.as_ptr()) }?;
+        unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
+        self.used.set(self.used.get() + 1);
+        Some((block, self.free_is_zero.get()))
     }
 
+    #[allow(clippy::forget_non_drop)]
     pub(crate) fn pop_block_aligned(&self, align: usize) -> Option<(BlockRef<'a>, bool)> {
-        self.free.take().and_then(|mut block| {
-            if block.as_ptr().is_aligned_to(align) {
-                self.used.set(self.used.get() + 1);
-                self.free.set(block.take_next());
-                Some((block, self.free_is_zero.get()))
-            } else {
-                self.free.set(Some(block));
-                None
-            }
-        })
+        let mut block = unsafe { ptr::read(self.free.as_ptr()) }?;
+        if block.as_ptr().is_aligned_to(align) {
+            unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
+            self.used.set(self.used.get() + 1);
+            Some((block, self.free_is_zero.get()))
+        } else {
+            mem::forget(block);
+            None
+        }
     }
 
     /// # Returns
@@ -441,28 +440,35 @@ impl<'a> Shard<'a> {
         self.used.set(self.used.get() - count);
     }
 
+    #[allow(clippy::forget_non_drop)]
     pub(crate) fn collect(&self, force: bool) -> bool {
         if force || !self.thread_free.get().load(Relaxed).is_null() {
             self.collect_thread_free();
         }
 
-        match self.local_free.take() {
-            Some(lfree) => match self.free.take() {
-                None => {
+        let local_free = self.local_free.as_ptr();
+        let free = self.free.as_ptr();
+
+        unsafe {
+            match (ptr::read(local_free), ptr::read(free)) {
+                (Some(lfree), None) => {
                     self.free_is_zero.set(false);
-                    self.free.set(Some(lfree));
+                    ptr::write(local_free, None);
+                    ptr::write(free, Some(lfree));
                 }
-                Some(ofree) if !force => {
-                    self.local_free.set(Some(lfree));
-                    self.free.set(Some(ofree));
-                }
-                Some(mut ofree) => {
+                (Some(lfree), Some(ofree)) if !force => mem::forget((lfree, ofree)),
+                (Some(lfree), Some(mut ofree)) => {
                     ofree.set_tail(Some(lfree));
                     self.free_is_zero.set(false);
-                    self.free.set(Some(ofree));
+                    ptr::write(local_free, None);
+                    mem::forget(ofree);
                 }
-            },
-            None => return self.has_free(),
+                (None, x) => {
+                    let ret = x.is_some();
+                    mem::forget(x);
+                    return ret;
+                }
+            }
         }
         true
     }
