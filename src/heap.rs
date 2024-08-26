@@ -198,7 +198,8 @@ impl<'arena, B: BaseAlloc> Drop for Context<'arena, B> {
 struct Bin<'arena> {
     list: ShardList<'arena>,
     obj_size: usize,
-    index: usize,
+    min_direct_index: usize,
+    max_direct_index: usize,
 }
 
 /// A memory allocator unit of ferroc.
@@ -267,7 +268,11 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 index => Bin {
                     list: ShardList::DEFAULT,
                     obj_size: obj_size(index),
-                    index,
+                    min_direct_index: match index.checked_sub(1) {
+                        None => 0,
+                        Some(index_m1) => direct_index(obj_size(index_m1)) + 1
+                    },
+                    max_direct_index: direct_index(obj_size(index)),
                 };
                 OBJ_SIZE_COUNT
             ],
@@ -359,21 +364,11 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             return;
         }
         let shard = bin.list.current().unwrap_or(EMPTY_SHARD.as_ref());
-
-        let direct_index = direct_index(bin.obj_size);
-        if ptr::eq(self.direct_shards[direct_index].get(), shard) {
+        if ptr::eq(self.direct_shards[bin.max_direct_index].get(), shard) {
             return;
         }
-        let end = direct_index;
-        let start = if end == 1 {
-            0
-        } else {
-            let obj_size = self::obj_size(bin.index - 1);
-            let direct_index = self::direct_index(obj_size);
-            direct_index + 1
-        };
-        let range = self.direct_shards[start..=end].iter();
-        range.for_each(|d| d.set(shard));
+        let slice = &self.direct_shards[bin.min_direct_index..=bin.max_direct_index];
+        slice.iter().for_each(|d| d.set(shard));
     }
 
     #[inline]
@@ -815,6 +810,10 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         if self.is_init() {
             // SAFETY: `self` is initialized.
             unsafe { self.collect_huge() };
+        }
+
+        if force && let Some(cx) = self.cx {
+            cx.arena.reclaim_all();
         }
     }
 }
