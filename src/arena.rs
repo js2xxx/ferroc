@@ -514,7 +514,6 @@ impl<B: BaseAlloc> Arenas<B> {
         }
 
         let layout = slab_layout(count).align_to(align).unwrap();
-        std::eprintln!("Uh-oh! {layout:?}");
         Err(Error::Unsupported(layout))
     }
 
