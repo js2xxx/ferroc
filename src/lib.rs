@@ -145,14 +145,31 @@
 #![cfg_attr(feature = "global", allow(internal_features))]
 #![cfg_attr(feature = "global", feature(allow_internal_unsafe))]
 #![cfg_attr(feature = "global", feature(allow_internal_unstable))]
+#![cfg_attr(feature = "c", feature(linkage))]
 
 #[cfg(any(test, miri, feature = "base-mmap"))]
 extern crate std;
+
+#[cfg(feature = "c")]
+macro_rules! forward {
+    (@IMPL $name:ident($($aname:ident, $atype:ty),*) $(-> $ret:ty)? => $target:ident) => {
+        #[no_mangle]
+        #[cfg(sys_alloc)]
+        pub unsafe extern "C" fn $name($($aname: $atype),*) $(-> $ret)? {
+            $target($($aname),*)
+        }
+    };
+    ($($name:ident($($aname:ident: $atype:ty),*) $(-> $ret:ty)? => $target:ident;)*) => {
+        $(forward!(@IMPL $name($($aname, $atype),*) $(-> $ret)? => $target);)*
+    };
+}
 
 pub mod arena;
 pub mod base;
 #[cfg(feature = "c")]
 mod c;
+#[cfg(feature = "c")]
+mod cpp;
 #[cfg(feature = "global")]
 #[doc(hidden)]
 pub mod global;
