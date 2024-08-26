@@ -100,6 +100,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crabgrind"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdbd43e4f32a9681a504577db2d4ea7d3f7b1bf2e97955561af98501ab600508"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "derive_arbitrary"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -131,6 +140,7 @@ name = "ferroc"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "crabgrind",
  "fastrand",
  "libc",
  "region",

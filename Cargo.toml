@@ -16,8 +16,10 @@ default = ["global", "base-mmap", "base-static", "libc"]
 global = []
 libc = ["dep:libc"]
 stat = []
+track-valgrind = ["dep:crabgrind"]
 
 [dependencies]
+crabgrind = {version = "=0.1.9", optional = true}
 libc = {version = "0.2", optional = true}
 region = {version = "3.0", optional = true}
 

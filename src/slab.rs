@@ -1,3 +1,4 @@
+mod block;
 mod cell_link;
 
 use core::{
@@ -5,12 +6,16 @@ use core::{
     marker::PhantomData,
     mem::{self, MaybeUninit},
     num::NonZeroUsize,
-    ops::{Deref, DerefMut},
+    ops::Deref,
     ptr::{self, addr_of_mut, NonNull},
     sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering::*},
 };
 
-use self::cell_link::{CellLink, CellLinked, CellList};
+pub(crate) use self::block::BlockRef;
+use self::{
+    block::AtomicBlockRef,
+    cell_link::{CellLink, CellLinked, CellList},
+};
 use crate::{
     arena::{SHARD_COUNT, SHARD_SIZE, SLAB_SIZE},
     Stat,
@@ -209,9 +214,9 @@ impl<'a> Slab<'a> {
         let shards: &mut [MaybeUninit<Shard<'a>>; SHARD_COUNT] =
             mem::transmute(addr_of_mut!((*slab).shards).as_uninit_mut().unwrap());
 
-        let (first, next) = shards[Self::HEADER_COUNT..].split_first_mut().unwrap();
+        let (first, rest) = shards[Self::HEADER_COUNT..].split_first_mut().unwrap();
         first.write(Shard::new(SHARD_COUNT - Self::HEADER_COUNT, free_is_zero));
-        for s in next {
+        for s in rest {
             s.write(Shard::new(0, free_is_zero));
         }
 
@@ -280,16 +285,16 @@ impl<'a> Shard<'a> {
     pub(crate) fn pop_block(&self) -> Option<BlockRef<'a>> {
         self.free.take().map(|mut block| {
             self.used.set(self.used.get() + 1);
-            self.free.set(block.next.take());
+            self.free.set(block.take_next());
             block
         })
     }
 
     pub(crate) fn pop_block_aligned(&self, align: usize) -> Option<BlockRef<'a>> {
         self.free.take().and_then(|mut block| {
-            if block.0.is_aligned_to(align) {
+            if block.as_ptr().is_aligned_to(align) {
                 self.used.set(self.used.get() + 1);
-                self.free.set(block.next.take());
+                self.free.set(block.take_next());
                 Some(block)
             } else {
                 self.free.set(Some(block));
@@ -302,7 +307,7 @@ impl<'a> Shard<'a> {
     ///
     /// `true` if this shard is unused after the deallocation.
     pub(crate) fn push_block(&self, mut block: BlockRef<'a>) -> bool {
-        block.next = self.local_free.take();
+        block.set_next(self.local_free.take());
         self.local_free.set(Some(block));
         self.used.set(self.used.get() - 1);
         self.used.get() == 0
@@ -317,15 +322,15 @@ impl<'a> Shard<'a> {
     pub(crate) unsafe fn push_block_mt(this: NonNull<Self>, mut block: BlockRef<'a>) {
         // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
         // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
-        let thread_free = unsafe { &*ptr::addr_of!((*this.as_ptr()).thread_free) };
+        let thread_free = unsafe { &*ptr::addr_of!((*this.as_ptr()).thread_free) }.get();
 
-        let mut cur = thread_free.0.load(Relaxed);
+        let mut cur = thread_free.load(Relaxed);
         loop {
             // SAFETY: `thread_free` owns a list of blocks.
-            block.next = NonNull::new(cur).map(|p| unsafe { BlockRef::from_raw(p) });
+            block.set_next(NonNull::new(cur).map(|p| unsafe { BlockRef::from_raw(p) }));
 
-            let new = block.0.as_ptr();
-            match thread_free.0.compare_exchange(cur, new, AcqRel, Acquire) {
+            let new = block.as_ptr();
+            match thread_free.compare_exchange(cur, new, AcqRel, Acquire) {
                 Ok(_) => break,
                 Err(e) => cur = e,
             }
@@ -333,23 +338,14 @@ impl<'a> Shard<'a> {
     }
 
     fn collect_thread_free(&self) {
-        let ptr = self.thread_free.0.swap(ptr::null_mut(), AcqRel);
+        let ptr = self.thread_free.get().swap(ptr::null_mut(), AcqRel);
         let mut thread_free = match NonNull::new(ptr) {
             // SAFETY: `thread_free` owns a list of blocks.
             Some(ptr) => unsafe { BlockRef::from_raw(ptr) },
             _ => return,
         };
 
-        let mut tail = &mut thread_free;
-        let mut count = 1;
-        *loop {
-            match &mut tail.next {
-                Some(next) => tail = next,
-                slot => break slot,
-            }
-            count += 1;
-        } = self.local_free.take();
-
+        let count = thread_free.set_tail(self.local_free.take());
         self.local_free.set(Some(thread_free));
         self.used.set(self.used.get() - count);
     }
@@ -364,13 +360,7 @@ impl<'a> Shard<'a> {
             if !force {
                 self.local_free.set(Some(local_free));
             } else {
-                let mut tail = &mut free;
-                *loop {
-                    match &mut tail.next {
-                        Some(next) => tail = next,
-                        slot => break slot,
-                    }
-                } = Some(local_free);
+                free.set_tail(Some(local_free));
                 self.free_is_zero.set(false);
             }
             free
@@ -402,14 +392,12 @@ impl<'a> Shard<'a> {
 
         // SAFETY: the `area` is owned by this shard in a similar way to `Cell<[u8]>`.
         let iter = (capacity..capacity + count).map(|index| unsafe {
-            let ptr = area.add(index * obj_size);
-            ptr.write_bytes(0, mem::size_of::<Block>());
-            BlockRef::from_raw(ptr.cast())
+            BlockRef::new(area.add(index * obj_size).cast(), !self.free_is_zero.get())
         });
 
         let mut last = self.free.take();
         iter.rev().for_each(|mut block| {
-            block.next = last.take();
+            block.set_next(last.take());
             last = Some(block);
         });
         self.free.set(last);
@@ -517,57 +505,3 @@ impl<'a> Shard<'a> {
 }
 
 pub(crate) type ShardList<'a> = CellList<'a, Shard<'a>>;
-
-/// An allocated block before delivered to the user. That is to say, it contains
-/// a valid [`Block`].
-///
-/// The block owns its underlying memory, although the corresponding size is
-/// specified by its shard.
-#[repr(transparent)]
-#[must_use = "blocks must be used"]
-pub(crate) struct BlockRef<'a>(NonNull<()>, PhantomData<&'a ()>);
-
-// SAFETY: The block owns its underlying memory.
-unsafe impl<'a> Send for BlockRef<'a> {}
-unsafe impl<'a> Sync for BlockRef<'a> {}
-
-pub(crate) struct Block<'a> {
-    next: Option<BlockRef<'a>>,
-}
-
-impl<'a> Deref for BlockRef<'a> {
-    type Target = Block<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: The block contains a valid block data.
-        unsafe { self.0.cast().as_ref() }
-    }
-}
-
-impl<'a> DerefMut for BlockRef<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: The block contains a valid block data.
-        unsafe { self.0.cast().as_mut() }
-    }
-}
-
-impl<'a> BlockRef<'a> {
-    #[must_use = "blocks must be used"]
-    pub(crate) fn into_raw(self) -> NonNull<()> {
-        self.0
-    }
-
-    /// # Safety
-    ///
-    /// The pointer must contain a valid block data.
-    pub(crate) unsafe fn from_raw(ptr: NonNull<()>) -> Self {
-        BlockRef(ptr, PhantomData)
-    }
-}
-
-/// An atomic slot containing an `Option<Block<'a>>`.
-#[derive(Default)]
-#[repr(transparent)]
-struct AtomicBlockRef<'a>(AtomicPtr<()>, PhantomData<&'a ()>);
-
-impl<'a> AtomicBlockRef<'a> {}
