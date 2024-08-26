@@ -249,7 +249,7 @@ impl<'a, 'list, T: CellLinked<'a>, F: FnMut(&'a T) -> bool> Iterator for Drain<'
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let value = self.cur.take()?;
+            let value = self.cur?;
             self.cur = value.link().next.get();
             if (self.pred)(value) {
                 self.list.remove(value);

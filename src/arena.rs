@@ -185,7 +185,6 @@ impl<B: BaseAlloc> Arena<B> {
         &self,
         thread_id: usize,
         count: usize,
-        is_large_or_huge: bool,
         base: &B,
     ) -> Option<Result<SlabRef<B>, Error<B>>> {
         let ptr = self.allocate_slices(count)?;
@@ -202,7 +201,6 @@ impl<B: BaseAlloc> Arena<B> {
                 ptr,
                 thread_id,
                 SlabSource::Arena(self.arena_id),
-                is_large_or_huge,
                 B::IS_ZEROED,
             )
         }))
@@ -405,13 +403,7 @@ impl<B: BaseAlloc> Arenas<B> {
         }
     }
 
-    fn try_reclaim(
-        &self,
-        thread_id: usize,
-        count: usize,
-        align: usize,
-        is_large_or_huge: bool,
-    ) -> Option<SlabRef<B>> {
+    fn try_reclaim(&self, thread_id: usize, count: usize, align: usize) -> Option<SlabRef<B>> {
         const MAX_TRIAL: usize = 8;
         let mut trial = MAX_TRIAL;
         while trial > 0
@@ -426,8 +418,7 @@ impl<B: BaseAlloc> Arenas<B> {
                         },
                     };
                     let raw = slab.into_raw();
-                    let slab =
-                        unsafe { Slab::init(raw, thread_id, slab_source, is_large_or_huge, false) };
+                    let slab = unsafe { Slab::init(raw, thread_id, slab_source, false) };
                     return Some(slab);
                 } else {
                     unsafe { self.deallocate(slab) };
@@ -484,19 +475,19 @@ impl<B: BaseAlloc> Arenas<B> {
         thread_id: usize,
         count: NonZeroUsize,
         align: usize,
-        is_large_or_huge: bool,
         direct: bool,
     ) -> Result<SlabRef<B>, Error<B>> {
         let count = count.get();
 
-        if let Some(reclaimed) = self.try_reclaim(thread_id, count, align, is_large_or_huge) {
+        if let Some(reclaimed) = self.try_reclaim(thread_id, count, align) {
             return Ok(reclaimed);
         }
 
         if align <= ObjSizeType::LARGE_MAX {
-            if let Some(slab) = self.arenas(false).find_map(|(_, arena)| {
-                arena.allocate(thread_id, count, is_large_or_huge, &self.base)
-            }) {
+            if let Some(slab) = self
+                .arenas(false)
+                .find_map(|(_, arena)| arena.allocate(thread_id, count, &self.base))
+            {
                 return slab;
             }
             const MIN_RESERVE_COUNT: usize = 32;
@@ -504,9 +495,7 @@ impl<B: BaseAlloc> Arenas<B> {
             let reserve_count = count.max(MIN_RESERVE_COUNT);
             let arena = Arena::new(&self.base, reserve_count, None, false)?;
             return match self.push_arena(arena) {
-                Ok(arena) => arena
-                    .allocate(thread_id, count, is_large_or_huge, &self.base)
-                    .unwrap(),
+                Ok(arena) => arena.allocate(thread_id, count, &self.base).unwrap(),
                 _ if direct => {
                     let res = self.base().allocate(slab_layout(reserve_count), true);
                     let chunk = res.map_err(Error::Alloc)?;
@@ -515,7 +504,6 @@ impl<B: BaseAlloc> Arenas<B> {
                             chunk.pointer(),
                             thread_id,
                             SlabSource::Base { chunk: ManuallyDrop::new(chunk) },
-                            is_large_or_huge,
                             B::IS_ZEROED,
                         )
                     };
