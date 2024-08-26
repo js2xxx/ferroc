@@ -95,7 +95,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |\
 2. Just `cmake` and `make` it:
 
 ```bash
-mkdir target && cd target
+mkdir target && cd target # Required to be `target`. Don't change it to `build` or other names.
 cmake .. && make
 ```
 
@@ -122,17 +122,11 @@ Time consumed:
 
 ![Time consumed #1](./assets/time1.svg)
 ![Time consumed #2](./assets/time2.svg)
-![Time consumed #3](./assets/time3.svg)
-![Time consumed #4](./assets/time4.svg)
-![Time consumed #5](./assets/time5.svg)
 
 Memory consumed:
 
 ![Memory consumed #1](./assets/memory1.svg)
 ![Memory consumed #2](./assets/memory2.svg)
-![Memory consumed #3](./assets/memory3.svg)
-![Memory consumed #4](./assets/memory4.svg)
-![Memory consumed #5](./assets/memory5.svg)
 
 ## Caveats
 
