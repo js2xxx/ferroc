@@ -488,17 +488,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
     }
 
-    unsafe fn allocate_inner(
-        &self,
-        layout: Layout,
-        zero: bool,
-    ) -> Result<NonNull<[u8]>, Error<B>> {
+    unsafe fn allocate_inner(&self, layout: Layout, zero: bool) -> Result<NonNull<[u8]>, Error<B>> {
         if layout.size() == 0 {
-            // SAFETY: Alignments are not zero.
-            return Ok(unsafe {
-                let ptr = ptr::without_provenance_mut(layout.align());
-                NonNull::from_raw_parts(NonNull::new_unchecked(ptr), 0)
-            });
+            return Ok(NonNull::from_raw_parts(layout.dangling().cast(), 0));
         }
         #[cfg(feature = "stat")]
         let mut stat = self.cx()?.stat.borrow_mut();

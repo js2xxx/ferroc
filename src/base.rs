@@ -7,11 +7,7 @@ mod mmap;
 #[cfg(feature = "base-static")]
 mod static_;
 
-use core::{
-    alloc::{AllocError, Allocator, Layout},
-    mem::ManuallyDrop,
-    ptr::NonNull,
-};
+use core::{alloc::Layout, ptr::NonNull};
 
 #[cfg(feature = "base-mmap")]
 pub use self::mmap::Mmap;
@@ -92,52 +88,6 @@ pub unsafe trait BaseAlloc: Sized {
     /// `ptr` must point to a block of memory whose content is no longer used.
     unsafe fn decommit(&self, ptr: NonNull<[u8]>) {
         let _ = ptr;
-    }
-}
-
-// SAFETY: Any `Allocator` is a valid `BaseAlloc`.
-unsafe impl<A: Allocator + Clone> BaseAlloc for A {
-    /// Regardless of whether the allocator is zeroed by default.
-    const IS_ZEROED: bool = false;
-
-    type Handle = ManuallyDrop<Self>;
-
-    type Error = AllocError;
-
-    fn allocate(&self, layout: Layout, _commit: bool) -> Result<Chunk<Self>, Self::Error> {
-        let ptr = Allocator::allocate(self, layout)?;
-        Ok(unsafe { Chunk::new(ptr.cast(), layout, ManuallyDrop::new(self.clone())) })
-    }
-
-    unsafe fn deallocate(chunk: &mut Chunk<Self>) {
-        let ptr = chunk.pointer().cast();
-        chunk.handle.deallocate(ptr, chunk.layout());
-        ManuallyDrop::drop(&mut chunk.handle);
-    }
-}
-
-/// A zeroed base allocator wrapper of an [`Allocator`].
-///
-/// The allocated memory chunk of this structure is always zeroed.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Zeroed<A: Allocator>(pub A);
-
-unsafe impl<A: Allocator + Clone> BaseAlloc for Zeroed<A> {
-    const IS_ZEROED: bool = true;
-
-    type Handle = ManuallyDrop<A>;
-
-    type Error = AllocError;
-
-    fn allocate(&self, layout: Layout, _commit: bool) -> Result<Chunk<Self>, Self::Error> {
-        let ptr = Allocator::allocate_zeroed(&self.0, layout)?;
-        Ok(unsafe { Chunk::new(ptr.cast(), layout, ManuallyDrop::new(self.0.clone())) })
-    }
-
-    unsafe fn deallocate(chunk: &mut Chunk<Self>) {
-        let ptr = chunk.pointer().cast();
-        chunk.handle.deallocate(ptr, chunk.layout());
-        ManuallyDrop::drop(&mut chunk.handle);
     }
 }
 
