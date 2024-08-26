@@ -183,7 +183,7 @@ impl<B: BaseAlloc> Arena<B> {
 
     fn allocate(
         &self,
-        thread_id: u64,
+        thread_id: usize,
         count: usize,
         is_large_or_huge: bool,
         base: &B,
@@ -407,7 +407,7 @@ impl<B: BaseAlloc> Arenas<B> {
 
     fn try_reclaim(
         &self,
-        thread_id: u64,
+        thread_id: usize,
         count: usize,
         align: usize,
         is_large_or_huge: bool,
@@ -481,7 +481,7 @@ impl<B: BaseAlloc> Arenas<B> {
 
     pub(crate) fn allocate(
         &self,
-        thread_id: u64,
+        thread_id: usize,
         count: NonZeroUsize,
         align: usize,
         is_large_or_huge: bool,

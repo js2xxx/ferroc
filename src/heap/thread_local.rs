@@ -41,10 +41,6 @@ impl BucketIndex {
             index: index as usize,
         }
     }
-
-    fn id_in_bucket(&self) -> impl Iterator<Item = u64> + '_ {
-        (0..self.bucket_count).map(move |i| (self.bucket_count + i) as u64)
-    }
 }
 
 #[repr(align(128))]
@@ -90,18 +86,18 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
             unreachable!("allocation for thread-local failed: too many bucket requests")
         };
         let mut bucket = chunk.pointer().cast::<Entry<'arena, B>>();
-        for id in bi.id_in_bucket() {
+        for _ in 0..bi.bucket_count {
             // SAFETY: All `bucket`s are within the range of the previously allocated chunk,
             // for its layout is calculated before.
             unsafe {
                 let td = bucket.as_uninit_mut();
                 let td = td.write(Entry {
-                    cx: ManuallyDrop::new(Context::new_with_id(arenas, id)),
+                    cx: ManuallyDrop::new(Context::new(arenas)),
                     heap: ManuallyDrop::new(Heap::new_uninit()),
                     next_reclaimed_id: AtomicU64::new(0),
                     _marker: PhantomPinned,
                 });
-                td.heap.init(&td.cx);
+                td.heap.init(Pin::new_unchecked(&td.cx));
                 bucket = bucket.add(1);
             }
         }

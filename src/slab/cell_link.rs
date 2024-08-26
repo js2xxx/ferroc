@@ -5,11 +5,13 @@ pub trait CellLinked<'a> {
 }
 
 pub struct CellLink<'a, T: 'a + ?Sized> {
+    #[cfg(debug_assertions)]
     linked_to: Cell<usize>,
     prev: Cell<Option<&'a T>>,
     next: Cell<Option<&'a T>>,
 }
 
+#[cfg(debug_assertions)]
 impl<'a, T: 'a + ?Sized> core::fmt::Debug for CellLink<'a, T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let linked_to = self.linked_to.get();
@@ -24,6 +26,7 @@ impl<'a, T: 'a + ?Sized> core::fmt::Debug for CellLink<'a, T> {
 impl<'a, T> CellLink<'a, T> {
     pub const fn new() -> Self {
         CellLink {
+            #[cfg(debug_assertions)]
             linked_to: Cell::new(0),
             prev: Cell::new(None),
             next: Cell::new(None),
@@ -32,6 +35,7 @@ impl<'a, T> CellLink<'a, T> {
 }
 
 impl<'a, T> CellLink<'a, T> {
+    #[cfg(debug_assertions)]
     pub fn is_linked(&self) -> bool {
         self.linked_to.get() != 0
     }
@@ -46,6 +50,7 @@ impl<'a, T> Default for CellLink<'a, T> {
 pub struct CellList<'a, T: 'a + ?Sized> {
     head: Cell<Option<&'a T>>,
     tail: Cell<Option<&'a T>>,
+    #[cfg(debug_assertions)]
     len: Cell<usize>,
 }
 
@@ -57,12 +62,15 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
         CellList {
             head: Cell::new(None),
             tail: Cell::new(None),
+            #[cfg(debug_assertions)]
             len: Cell::new(0),
         }
     }
 
     pub fn push(&self, value: &'a T) {
+        #[cfg(debug_assertions)]
         debug_assert!(!value.link().is_linked());
+        #[cfg(debug_assertions)]
         value.link().linked_to.set((self as *const Self).addr());
 
         let next = self.head.take();
@@ -72,11 +80,13 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
             None => self.tail.set(Some(value)),
         }
         self.head.set(Some(value));
+        #[cfg(debug_assertions)]
         self.len.set(self.len.get() + 1);
     }
 
     pub fn pop(&self) -> Option<&'a T> {
         self.head.take().inspect(|value| {
+            #[cfg(debug_assertions)]
             self.len.set(self.len.get() - 1);
             let next = value.link().next.take();
             match next {
@@ -84,19 +94,21 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
                 None => self.tail.set(None),
             }
             self.head.set(next);
+            #[cfg(debug_assertions)]
             value.link().linked_to.set(0);
         })
     }
 
+    #[cfg(debug_assertions)]
     pub fn contains(&self, value: &'a T) -> bool {
         value.link().linked_to.get() == (self as *const Self).addr()
     }
 
-    pub fn remove(&self, value: &'a T) -> bool {
-        if !self.contains(value) {
-            return false;
-        }
+    pub fn remove(&self, value: &'a T) {
+        #[cfg(debug_assertions)]
+        debug_assert!(self.contains(value));
 
+        #[cfg(debug_assertions)]
         self.len.set(self.len.get() - 1);
         let prev = value.link().prev.take();
         let next = value.link().next.take();
@@ -108,20 +120,60 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
             Some(next) => next.link().prev.set(prev),
             None => self.tail.set(prev),
         }
+        #[cfg(debug_assertions)]
         value.link().linked_to.set(0);
-        true
+    }
+
+    pub fn requeue_to(&self, value: &'a T, other: &Self) {
+        #[cfg(debug_assertions)]
+        debug_assert!(self.contains(value));
+
+        #[cfg(debug_assertions)]
+        self.len.set(self.len.get() - 1);
+        #[cfg(debug_assertions)]
+        other.len.set(other.len.get() + 1);
+        #[cfg(debug_assertions)]
+        value.link().linked_to.set((other as *const Self).addr());
+
+        let new_next = other.head.take();
+        let last_prev = value.link().prev.take();
+        let last_next = value.link().next.replace(new_next);
+
+        match last_prev {
+            Some(prev) => prev.link().next.set(last_next),
+            None => self.head.set(last_next),
+        }
+
+        match last_next {
+            Some(next) => next.link().prev.set(last_prev),
+            None => self.tail.set(last_prev),
+        }
+
+        match new_next {
+            Some(next) => next.link().prev.set(Some(value)),
+            None => other.tail.set(Some(value)),
+        }
+        other.head.set(Some(value));
     }
 
     pub fn current(&self) -> Option<&'a T> {
         self.head.get()
     }
 
+    #[cfg(debug_assertions)]
     pub fn len(&self) -> usize {
         self.len.get()
     }
 
+    #[cfg(debug_assertions)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn has_sole_member(&self) -> bool {
+        let head_addr = self.head.get().map(|x| (x as *const T).addr()).unwrap_or(0);
+        let tail_addr = self.tail.get().map(|x| (x as *const T).addr()).unwrap_or(0);
+        head_addr == tail_addr
     }
 
     pub fn iter(&self) -> Iter<'a, T> {
@@ -189,8 +241,7 @@ impl<'a, 'list, T: CellLinked<'a>, F: FnMut(&'a T) -> bool> Iterator for Drain<'
             let value = self.cur.take()?;
             self.cur = value.link().next.get();
             if (self.pred)(value) {
-                let _ret = self.list.remove(value);
-                debug_assert!(_ret);
+                self.list.remove(value);
                 break Some(value);
             }
         }
@@ -224,8 +275,7 @@ impl<'a, 'list, T: CellLinked<'a>> CellCursor<'a, 'list, T> {
         let next = cur.and_then(|cur| cur.link().next.get());
         self.cur = next;
         if let Some(cur) = cur {
-            let _ret = self.list.remove(cur);
-            debug_assert!(_ret);
+            self.list.remove(cur);
         }
         cur
     }

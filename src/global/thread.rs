@@ -15,6 +15,7 @@ macro_rules! thread_statics {
         #[thread_local]
         static HEAP: Cell<Pin<&Heap>> = Cell::new(THREAD_LOCALS.empty_heap());
 
+        #[inline(always)]
         pub fn with<T>(f: impl FnOnce(&Heap) -> T) -> T {
             f(&HEAP.get())
         }

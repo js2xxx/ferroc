@@ -19,6 +19,7 @@ use self::{
 use crate::{
     arena::{Error, SHARD_COUNT, SHARD_SIZE, SLAB_SIZE},
     base::{BaseAlloc, Chunk},
+    heap::ObjSizeType,
 };
 
 /// A big, sharded chunk of memory.
@@ -96,7 +97,7 @@ pub(crate) enum SlabSource<B: BaseAlloc> {
 // #[repr(align(4194304))] // SLAB_SIZE
 pub(crate) struct Slab<'a, B: BaseAlloc> {
     pub(super) source: SlabSource<B>,
-    pub(super) thread_id: u64,
+    pub(super) thread_id: usize,
     pub(super) is_large_or_huge: bool,
     pub(super) size: usize,
     used: Cell<usize>,
@@ -172,7 +173,7 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
     /// allocated block of memory sized `SLAB_SIZE`.
     pub(crate) unsafe fn init(
         ptr: NonNull<[u8]>,
-        thread_id: u64,
+        thread_id: usize,
         source: SlabSource<B>,
         is_large_or_huge: bool,
         free_is_zero: bool,
@@ -278,7 +279,7 @@ pub(crate) static EMPTY_SHARD: EmptyShard = EmptyShard(Shard {
     free: Cell::new(None),
     local_free: Cell::new(None),
     used: Cell::new(0),
-    flags: ShardFlags(AtomicU8::new(0)),
+    flags: ShardFlags::new(),
     free_is_zero: Cell::new(false),
     thread_free: AtomicBlockRef::new(),
 });
@@ -289,6 +290,10 @@ pub(crate) struct ShardFlags(AtomicU8);
 impl ShardFlags {
     const IS_IN_FULL: u8 = 0b0000_0001;
     const HAS_ALIGNED: u8 = 0b0000_0010;
+
+    const fn new() -> Self {
+        Self(AtomicU8::new(0))
+    }
 
     pub(crate) fn is_in_full(&self) -> bool {
         self.0.load(Relaxed) & Self::IS_IN_FULL != 0
@@ -306,8 +311,8 @@ impl ShardFlags {
         self.0.fetch_or(Self::HAS_ALIGNED, Relaxed);
     }
 
-    pub(crate) unsafe fn test_zero(this: *const ShardFlags) -> bool {
-        (*ptr::addr_of!((*this).0)).load(Relaxed) == 0
+    pub(crate) fn test_zero(&self) -> bool {
+        self.0.load(Relaxed) == 0
     }
 
     pub(crate) unsafe fn has_aligned(this: *const ShardFlags) -> bool {
@@ -326,6 +331,7 @@ impl ShardFlags {
 /// This structure cannot be used directly on stack, and must only be referenced
 /// from [`Slab`].
 #[derive(Default)]
+#[repr(align(128))]
 pub(crate) struct Shard<'a> {
     header: ShardHeader<'a>,
 
@@ -564,36 +570,37 @@ impl<'a> Shard<'a> {
         unsafe { BlockRef::from_raw(ptr) }
     }
 
-    fn extend_inner(&self, obj_size: usize, capacity: usize, cap_limit: usize) {
-        if cap_limit == capacity {
-            return;
+    fn extend_inner(&self, obj_size: usize, capacity: usize, cap_limit: usize) -> bool {
+        if capacity < cap_limit {
+            const MIN_EXTEND: usize = 4;
+            const MAX_EXTEND_SIZE: usize = 4096;
+
+            let limit = (MAX_EXTEND_SIZE / obj_size).max(MIN_EXTEND);
+
+            let count = limit.min(cap_limit - capacity);
+            debug_assert!(count > 0);
+            debug_assert!(capacity + count <= cap_limit);
+
+            let area = self.header.shard_area;
+            // SAFETY: the `area` is owned by this shard in a similar way to `Cell<[u8]>`.
+            let iter = (capacity..capacity + count)
+                .map(|index| unsafe { BlockRef::new(area.add(index * obj_size).cast()) });
+
+            let mut last = self.free.take();
+            iter.rev().for_each(|mut block| {
+                block.set_next(last.take());
+                last = Some(block);
+            });
+            self.free.set(last);
+
+            self.capacity.set(capacity + count);
+            return true;
         }
-        const MIN_EXTEND: usize = 4;
-        const MAX_EXTEND_SIZE: usize = 4096;
-
-        let limit = (MAX_EXTEND_SIZE / obj_size).max(MIN_EXTEND);
-
-        let count = limit.min(cap_limit - capacity);
-        debug_assert!(count > 0);
-        debug_assert!(capacity + count <= cap_limit);
-
-        let area = self.header.shard_area;
-        // SAFETY: the `area` is owned by this shard in a similar way to `Cell<[u8]>`.
-        let iter = (capacity..capacity + count)
-            .map(|index| unsafe { BlockRef::new(area.add(index * obj_size).cast()) });
-
-        let mut last = self.free.take();
-        iter.rev().for_each(|mut block| {
-            block.set_next(last.take());
-            last = Some(block);
-        });
-        self.free.set(last);
-
-        self.capacity.set(capacity + count);
+        false
     }
 
     #[inline]
-    pub(crate) fn extend(&self, obj_size: usize) {
+    pub(crate) fn extend(&self, obj_size: usize) -> bool {
         debug_assert_eq!(obj_size, self.obj_size.load(Relaxed));
         self.extend_inner(obj_size, self.capacity.get(), self.cap_limit.get())
     }
@@ -612,6 +619,7 @@ impl<'a> Shard<'a> {
         self.obj_size.store(obj_size, Relaxed);
         let usable_size = SLAB_SIZE * slab_count.get() - SHARD_SIZE * Slab::<B>::HEADER_COUNT;
         let cap_limit = usable_size / obj_size;
+        debug_assert!(cap_limit > 1);
         self.cap_limit.set(cap_limit);
         self.flags.reset();
 
@@ -639,7 +647,7 @@ impl<'a> Shard<'a> {
     ) -> Result<Option<&'a Shard<'a>>, Error<B>> {
         debug_assert!(obj_size <= SLAB_SIZE / 2);
 
-        if obj_size > SHARD_SIZE {
+        if obj_size > ObjSizeType::MEDIUM_MAX {
             self.init_large_or_huge(obj_size, NonZeroUsize::MIN, base)?;
             return Ok(None);
         }
@@ -654,6 +662,7 @@ impl<'a> Shard<'a> {
 
         let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
         let cap_limit = SHARD_SIZE / obj_size;
+        debug_assert!(cap_limit > 1);
         self.cap_limit.set(cap_limit);
         self.flags.reset();
 
@@ -678,6 +687,7 @@ impl<'a> Shard<'a> {
     }
 
     pub(crate) fn fini<B: BaseAlloc + 'a>(&self) -> Result<Option<&Self>, SlabRef<B>> {
+        #[cfg(debug_assertions)]
         debug_assert!(!self.link.is_linked());
 
         let (slab, _) = unsafe { self.slab::<B>() };
