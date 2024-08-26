@@ -460,7 +460,7 @@ impl<B: BaseAlloc> Arenas<B> {
             unsafe { Arena::drop(NonNull::new_unchecked(arena)) }
         } else {
             #[cfg(debug_assertions)]
-            panic!("deallocating memory not from these arenas")
+            panic!("deallocating memory not from these arenas: {ptr:p}")
         }
     }
 }

@@ -30,7 +30,7 @@
 //! let mut vec = Vec::with_capacity_in(10, Ferroc);
 //! vec.extend([1, 2, 3, 4, 5]);
 //!
-//! let layout = Layout::new::<[u32; 10]>();
+//! let layout = std::alloc::Layout::new::<[u32; 10]>();
 //! let memory = Ferroc.allocate(layout).unwrap();
 //! unsafe { Ferroc.deallocate(memory.cast(), layout) };
 //! ```
@@ -56,7 +56,7 @@
 //! // This is the capacity of the necessary additional static
 //! // memory space used by ferroc as the metadata storage.
 //! const HEADER_CAP: usize = 4096;
-//! ferroc::config!(pub Custom => ferroc::base::Static<HEADER_CAP>);
+//! ferroc::config!(pub Custom => ferroc::base::Static::<HEADER_CAP>);
 //!
 //! #[global_allocator]
 //! static CUSTOM: Custom = Custom;
