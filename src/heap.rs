@@ -57,7 +57,12 @@ impl<'a, Os: OsAlloc> Context<'a, Os> {
         }
     }
 
-    fn alloc_slab(&self, count: NonZeroUsize, align: usize, is_huge: bool) -> Result<&'a Shard<'a>, Error<Os>> {
+    fn alloc_slab(
+        &self,
+        count: NonZeroUsize,
+        align: usize,
+        is_huge: bool,
+    ) -> Result<&'a Shard<'a>, Error<Os>> {
         let slab = self.arena.allocate(self.thread_id, count, align, is_huge)?;
         Ok(slab.into_shard())
     }
@@ -229,7 +234,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
     }
 
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<Os>> {
-        if layout.size() % layout.align() == 0 {
+        if layout.size() <= SHARD_SIZE && layout.size() % layout.align() == 0 {
             return self.pop(layout.size());
         }
         self.pop_aligned(layout)
