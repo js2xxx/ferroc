@@ -426,8 +426,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         if layout.size() == 0 {
             // SAFETY: Alignments are not zero.
             return Ok(unsafe {
-                let addr = NonNull::new_unchecked(ptr::invalid_mut(layout.align()));
-                NonNull::from_raw_parts(addr, 0)
+                let ptr = ptr::without_provenance_mut(layout.align());
+                NonNull::from_raw_parts(NonNull::new_unchecked(ptr), 0)
             });
         }
         #[cfg(feature = "stat")]

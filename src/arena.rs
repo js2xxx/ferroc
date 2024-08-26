@@ -165,7 +165,7 @@ impl<B: BaseAlloc> Arena<B> {
         self.search_index.store(idx, Relaxed);
 
         let offset = (idx * BYTE_WIDTH + (bit as usize)) * SLAB_SIZE;
-        Some(NonNull::slice_from_raw_parts(
+        Some(NonNull::from_raw_parts(
             // SAFETY: `idx` and `bit` is valid, and thus `offset` is within the chunk memory
             // range.
             unsafe { self.chunk.pointer().cast().add(offset) },
