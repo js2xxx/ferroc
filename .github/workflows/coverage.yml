@@ -24,7 +24,7 @@ jobs:
       - name: Cache fuzzing data
         uses: actions/cache@v4
         with:
-          key: ${{ runner.os }}-fuzz-${{ hashFiles('./fuzz/corpus/*') }}
+          key: ${{ runner.os }}-fuzz-${{ hashFiles('./fuzz/coverage/*/coverage.profdata') }}
           restore-keys: |
             ${{ runner.os }}-fuzz-
             ${{ runner.os }}-
