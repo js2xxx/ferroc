@@ -46,7 +46,7 @@ macro_rules! config_inner {
         #[doc = concat!("\n\nSee [`Error`](", stringify!($crate), "::arena::Error) for more information.")]
         $vis type Error = $crate::arena::Error<$bt>;
         type ThreadLocal<'arena> = $crate::heap::ThreadLocal<'arena, $bt>;
-        type AllocateOptions<F, E> = $crate::heap::AllocateOptions<F, E>;
+        type AllocateOptions<F> = $crate::heap::AllocateOptions<F>;
     };
     (@ARENA $vis:vis, $bs:expr) => {
         static ARENAS: Arenas = Arenas::new($bs);
@@ -115,14 +115,12 @@ macro_rules! config_inner {
             /// information.
             #[inline]
             $vis fn allocate(&self, layout: core::alloc::Layout)
-                -> Result<core::ptr::NonNull<()>, Error>
+                -> Result<core::ptr::NonNull<()>, core::alloc::AllocError>
             {
-                #[allow(dropping_references)]
                 thread::with_lazy(|heap, fallback| {
-                    let mut err = core::mem::MaybeUninit::uninit();
-                    let options = AllocateOptions::new(fallback, |e| drop(err.write(e)));
+                    let options = AllocateOptions::new(fallback);
                     heap.allocate_with(layout, false, options)
-                        .ok_or_else(|| unsafe { err.assume_init() })
+                        .ok_or(core::alloc::AllocError)
                 })
             }
 
@@ -139,14 +137,12 @@ macro_rules! config_inner {
             /// information.
             #[inline]
             $vis fn allocate_zeroed(&self, layout: core::alloc::Layout)
-                -> Result<core::ptr::NonNull<()>, Error>
+                -> Result<core::ptr::NonNull<()>, core::alloc::AllocError>
             {
-                #[allow(dropping_references)]
                 thread::with_lazy(|heap, fallback| {
-                    let mut err = core::mem::MaybeUninit::uninit();
-                    let options = AllocateOptions::new(fallback, |e| drop(err.write(e)));
+                    let options = AllocateOptions::new(fallback);
                     heap.allocate_with(layout, true, options)
-                        .ok_or_else(|| unsafe { err.assume_init() })
+                        .ok_or(core::alloc::AllocError)
                 })
             }
 

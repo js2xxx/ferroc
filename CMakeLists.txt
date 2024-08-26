@@ -4,22 +4,21 @@ project(ferroc)
 
 option(FE_TRACK_VALGRIND, "Compile with valgrind support" OFF)
 option(FE_FINER_GRAINED, "Increase heap efficiency while decreasing minimal alignment from 16 to 8" OFF)
+option(FE_PGO_GATHER, "Enable PGO profiling: add instrumentation" OFF)
+option(FE_PGO_USE, "Enable PGO profiling: use pre-compiled profile" OFF)
 
 include(GNUInstallDirs)
 
 find_program(
-    CARGO cargo
+    CARGO cargo REQUIRED
     HINTS ${CARGO_HOME} ${HOME}/.cargo
     PATH_SUFFIXES bin
 )
-
-if(NOT CARGO)
-    message(
-        FATAL_ERROR
-        "Could not find cargo. Please download and install the Rust toolchains "
-        "via the official website: https://www.rust-lang.org/install"
-    )
-endif()
+find_program(
+    RUSTC rustc REQUIRED
+    HINTS ${CARGO_HOME} ${HOME}/.cargo
+    PATH_SUFFIXES bin
+)
 
 exec_program(
     ${CARGO} ARGS +nightly --version
@@ -104,18 +103,53 @@ set(RUSTFLAGS "--cfg sys_alloc -Ztls-model=initial-exec -Cpanic=abort")
 if(CMAKE_BUILD_TYPE MATCHES ".*Deb.*")
     set(RUSTFLAGS "${RUSTFLAGS} -Cdebuginfo=2")
 endif()
-message(STATUS "Rustc flags: ${RUSTFLAGS}")
+
+if(NOT FE_PGO_GATHER)
+    set(BUILD_FLAGS ${BUILD_FLAGS} -Zbuild-std=core,std,panic_abort -Zbuild-std-features=)
+endif()
+
+set(SRC_PROFDATA)
+if(FE_PGO_USE)
+    set(SRC_PROFDATA "/tmp/pgo/ferroc.profdata")
+
+    exec_program(
+        ${RUSTC} ARGS --print sysroot
+        OUTPUT_VARIABLE RUSTC_SYSROOT
+    )
+    find_program(
+        PROFDATA llvm-profdata
+        PATHS ${RUSTC_SYSROOT}/lib/rustlib/${TRIPLE}/bin
+        REQUIRED NO_DEFAULT_PATH
+    )
+
+    add_custom_command(
+        OUTPUT ${SRC_PROFDATA}
+        COMMAND ${CMAKE_COMMAND} -E make_directory /tmp/pgo
+        COMMAND ${PROFDATA} merge -o ${SRC_PROFDATA} ${CMAKE_BINARY_DIR}/pgo
+        COMMENT "Merging PGO profile data"
+    )
+    message(STATUS "Using PGO profile data at ${SRC_PROFDATA}, program at ${PROFDATA}")
+endif()
+
+if(FE_PGO_GATHER)
+    set(RUSTFLAGS "${RUSTFLAGS} -Cprofile-generate=${CMAKE_BINARY_DIR}/pgo")
+    message(STATUS "Enabling PGO gathering")
+elseif(FE_PGO_USE)
+    set(RUSTFLAGS "${RUSTFLAGS} -Cprofile-use=\"${SRC_PROFDATA}\"")
+    message(STATUS "Enabling PGO usage, please make sure data has been gathered")
+endif()
+
+message(STATUS "RUSTC flags: ${RUSTFLAGS}")
+message(STATUS "Build flags: ${BUILD_FLAGS}")
 
 add_custom_command(
     OUTPUT ${STATIC_LIB} ${SHARED_LIB}
     BYPRODUCTS ${HEADERS}
     COMMAND ${CMAKE_COMMAND}
         -E env RUSTFLAGS=${RUSTFLAGS}
-        ${CARGO} +nightly build ${BUILD_FLAGS} --features c
-        -Zbuild-std=core,std,panic_abort -Zbuild-std-features=
-        --target ${TRIPLE}
+        ${CARGO} +nightly build ${BUILD_FLAGS} --features c --target ${TRIPLE}
         --manifest-path ${CMAKE_CARGO_MANIFEST} --target-dir ${CMAKE_BINARY_DIR}
-    DEPENDS ${SRC}
+    DEPENDS ${SRC} ${SRC_PROFDATA}
     COMMENT "Building static & shared libraries of ferroc"
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )

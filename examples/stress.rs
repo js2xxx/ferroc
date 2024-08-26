@@ -18,7 +18,7 @@ const SCALE: usize = 5000;
 #[cfg(any(miri, debug_assertions))]
 const SCALE: usize = 10;
 #[cfg(not(any(miri, debug_assertions)))]
-const ITER: usize = 200;
+const ITER: usize = 25;
 #[cfg(any(miri, debug_assertions))]
 const ITER: usize = 1;
 #[cfg(not(any(miri, debug_assertions)))]

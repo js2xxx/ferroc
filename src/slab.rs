@@ -443,6 +443,10 @@ impl<'a> Shard<'a> {
         self.used.get() == 0
     }
 
+    pub(crate) fn free_is_zero(&self) -> bool {
+        self.free_is_zero.get()
+    }
+
     pub(crate) fn has_free(&self) -> bool {
         // SAFETY: We read the tag without moving out the inner `BlockRef`.
         unsafe { (*self.free.as_ptr()).is_some() }
@@ -452,7 +456,7 @@ impl<'a> Shard<'a> {
         unsafe { (*ptr::addr_of!((*this.as_ptr()).obj_size)).load(Relaxed) }
     }
 
-    pub(crate) fn pop_block(&self) -> Option<(BlockRef<'a>, bool)> {
+    pub(crate) fn pop_block(&self) -> Option<BlockRef<'a>> {
         // `Cell::take` should not be used due to its unconditional write to the storage
         // place with `None`, which causes an undefined behavior of racy read-write on
         // `EMPTY_SHARD`.
@@ -463,10 +467,10 @@ impl<'a> Shard<'a> {
         // ownership of this block, so we overwrite the slot with `block.take_next()`.
         unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
         self.used.set(self.used.get() + 1);
-        Some((block, self.free_is_zero.get()))
+        Some(block)
     }
 
-    pub(crate) fn pop_block_aligned(&self, align: usize) -> Option<(BlockRef<'a>, bool)> {
+    pub(crate) fn pop_block_aligned(&self, align: usize) -> Option<BlockRef<'a>> {
         // `Cell::take` should not be used due to its unconditional write to the storage
         // place with `None`, which causes an undefined behavior of racy read-write on
         // `EMPTY_SHARD`.
@@ -479,7 +483,7 @@ impl<'a> Shard<'a> {
             // with `block.take_next()`...
             unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
             self.used.set(self.used.get() + 1);
-            Some((block, self.free_is_zero.get()))
+            Some(block)
         } else {
             // ... and an unverified block should not be moved out, so we simply forget it.
             mem::forget(block);
@@ -631,32 +635,33 @@ impl<'a> Shard<'a> {
     }
 
     fn extend_inner(&self, obj_size: usize, capacity: usize, cap_limit: usize) -> bool {
-        if capacity < cap_limit {
-            const MIN_EXTEND: usize = 4;
-            const MAX_EXTEND_SIZE: usize = 4096;
-
-            let limit = (MAX_EXTEND_SIZE / obj_size).max(MIN_EXTEND);
-
-            let count = limit.min(cap_limit - capacity);
-            debug_assert!(count > 0);
-            debug_assert!(capacity + count <= cap_limit);
-
-            let area = self.header.shard_area;
-            // SAFETY: the `area` is owned by this shard in a similar way to `Cell<[u8]>`.
-            let iter = (capacity..capacity + count)
-                .map(|index| unsafe { BlockRef::new(area.add(index * obj_size).cast()) });
-
-            let mut last = self.free.take();
-            iter.rev().for_each(|mut block| {
-                block.set_next(last.take());
-                last = Some(block);
-            });
-            self.free.set(last);
-
-            self.capacity.set(capacity + count);
-            return true;
+        if capacity >= cap_limit {
+            return false;
         }
-        false
+
+        const MIN_EXTEND: usize = 4;
+        const MAX_EXTEND_SIZE: usize = 4096;
+
+        let limit = (MAX_EXTEND_SIZE / obj_size).max(MIN_EXTEND);
+
+        let count = limit.min(cap_limit - capacity);
+        debug_assert!(count > 0);
+        debug_assert!(capacity + count <= cap_limit);
+
+        let area = self.header.shard_area;
+        // SAFETY: the `area` is owned by this shard in a similar way to `Cell<[u8]>`.
+        let iter = (capacity..capacity + count)
+            .map(|index| unsafe { BlockRef::new(area.add(index * obj_size).cast()) });
+
+        let mut last = self.free.take();
+        iter.rev().for_each(|mut block| {
+            block.set_next(last.take());
+            last = Some(block);
+        });
+        self.free.set(last);
+
+        self.capacity.set(capacity + count);
+        true
     }
 
     #[inline]

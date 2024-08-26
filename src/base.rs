@@ -44,7 +44,7 @@ pub unsafe trait BaseAlloc: Sized {
     /// purposes.
     type Handle;
     /// The errors of the base allocator.
-    type Error;
+    type Error: BaseError;
 
     /// Allocate a memory [`Chunk`] of `layout`.
     ///
@@ -91,6 +91,17 @@ pub unsafe trait BaseAlloc: Sized {
         let _ = ptr;
     }
 }
+
+/// A marker trait depends on what features enabled:
+///
+/// - `error-log`: [`core::fmt::Display`];
+pub trait BaseError {}
+
+#[cfg(not(feature = "error-log"))]
+impl<T> BaseError for T {}
+
+#[cfg(feature = "error-log")]
+impl<T> BaseError for T where T: core::fmt::Display {}
 
 /// An owned representation of a valid memory block. Implementations like
 /// `Clone` and `Copy` are banned for its unique ownership.
