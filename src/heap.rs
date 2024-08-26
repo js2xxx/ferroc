@@ -374,6 +374,10 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// allocated by a certain instance of `Heap` alive in the scope, created
     /// from the same arena.
     pub unsafe fn layout_of(&self, ptr: NonNull<u8>) -> Option<Layout> {
+        #[cfg(debug_assertions)]
+        if !self.cx.arena.check_ptr(ptr) {
+            return None;
+        }
         if ptr.is_aligned_to(SLAB_SIZE) {
             return self.cx.arena.layout_of_direct(ptr);
         }
@@ -420,7 +424,11 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             unsafe { self.cx.arena.deallocate_direct(ptr) };
             return;
         }
-
+        #[cfg(debug_assertions)]
+        if !self.cx.arena.check_ptr(ptr) {
+            // panic!("{ptr:p} is not allocated from these arenas");
+            return;
+        }
         // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
         let Some(slab) = (unsafe { Slab::from_ptr(ptr) }) else {
             return;
