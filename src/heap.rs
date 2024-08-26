@@ -30,13 +30,11 @@ pub const OBJ_SIZES: &[usize] = &[
 pub(crate) const OBJ_SIZE_COUNT: usize = OBJ_SIZES.len();
 
 pub(crate) fn obj_size_index(size: usize) -> Option<usize> {
-    Some(match OBJ_SIZES.binary_search(&size) {
-        Ok(index) => index,
-        Err(index) => match OBJ_SIZES.get(index) {
-            Some(&size) if size <= SHARD_SIZE => index,
-            _ => return None,
-        },
-    })
+    let (Ok(index) | Err(index)) = OBJ_SIZES.binary_search(&size);
+    match OBJ_SIZES.get(index) {
+        Some(&size) if size <= SHARD_SIZE => Some(index),
+        _ => None,
+    }
 }
 
 pub struct Context<'a, B: BaseAlloc> {
