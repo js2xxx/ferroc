@@ -2,7 +2,7 @@ use core::{alloc::Layout, mem::ManuallyDrop, ptr::NonNull};
 
 use region::{Allocation, Protection};
 
-use super::{Chunk, BaseAlloc};
+use super::{BaseAlloc, Chunk};
 
 #[derive(Debug, Clone, Copy, Default, Hash)]
 pub struct MmapAlloc;
