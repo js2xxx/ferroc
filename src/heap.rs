@@ -212,6 +212,7 @@ pub(crate) fn post_alloc(ptr: NonNull<[u8]>, is_zeroed: bool, zero: bool) {
 
 impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// Creates a new heap from a memory allocator context.
+    #[inline]
     pub fn new(cx: &'cx Context<'arena, B>) -> Self {
         let mut heap = Self::new_uninit();
         unsafe { heap.init(cx) };
@@ -233,11 +234,13 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     }
 
     /// Tests if this heap is initialized (bound to a [context](Context)).
+    #[inline]
     pub const fn is_init(&self) -> bool {
         self.cx.is_some()
     }
 
     /// Tests if this heap is bound to a specific [context](Context).
+    #[inline]
     pub fn is_bound_to(&self, cx: &Context<'arena, B>) -> bool {
         self.cx.is_some_and(|this| ptr::eq(this, cx))
     }
@@ -253,6 +256,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// This function must be called only once for every uninitialized heap, and
     /// must not be called for those created with [`new`](Heap::new)
     /// (initialized upon creation).
+    #[inline]
     pub unsafe fn init(&mut self, cx: &'cx Context<'arena, B>) {
         const MAX_HEAP_COUNT: usize = 1;
 
@@ -265,6 +269,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         self.cx = Some(cx);
     }
 
+    #[inline]
     fn cx(&self) -> Result<&'cx Context<'arena, B>, Error<B>> {
         self.cx.ok_or(Error::Uninit)
     }
@@ -315,9 +320,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         stat: &mut Stat,
         set_align: bool,
     ) -> Result<(NonNull<[u8]>, bool), Error<B>> {
-        let ty = match obj_size_type(size) {
-            ty @ (Small | Medium | Large) => ty,
-            Huge => return self.pop_huge_untracked(size, stat, set_align),
+        let ty @ (Small | Medium | Large) = obj_size_type(size) else {
+            return self.pop_huge_untracked(size, stat, set_align);
         };
         let index = obj_size_index(size);
 
@@ -362,8 +366,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             let mut cursor = list.cursor_head();
             loop {
                 let shard = cursor.get()?;
-                shard.collect(false);
-                shard.extend();
+                if !shard.collect(false) {
+                    shard.extend();
+                }
 
                 match shard.pop_block() {
                     Some(block) => {
@@ -415,10 +420,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             add_free(free, stat)?;
         } else {
             // 2. Try to collect potentially unfull shards.
-            let unfulled = self.full_shards.drain(|shard| {
-                shard.collect(false);
-                !shard.is_full()
-            });
+            let unfulled = self.full_shards.drain(|shard| shard.collect(false));
             let mut has_unfulled = false;
             unfulled.for_each(|shard| {
                 let i = obj_size_index(shard.obj_size.load(Relaxed));
@@ -688,7 +690,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                         stat.huge_size -= obj_size;
                     }
 
-                    self.huge_shards.remove(shard);
+                    let _ret = self.huge_shards.remove(shard);
+                    debug_assert!(_ret);
                     cx.finalize_shard(shard, &mut stat);
                 }
             }
@@ -716,7 +719,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// allocation process, which is precisely what this function does.
     pub fn collect(&self, force: bool) {
         let shards = self.shards.iter().flatten();
-        shards.for_each(|shard| shard.collect(force));
+        shards.for_each(|shard| {
+            shard.collect(force);
+        });
 
         #[cfg(feature = "stat")]
         let mut stat = self.cx.unwrap().stat.borrow_mut();

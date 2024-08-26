@@ -370,11 +370,11 @@ impl<'a> Shard<'a> {
         self.used.set(self.used.get() - count);
     }
 
-    pub(crate) fn collect(&self, force: bool) {
+    pub(crate) fn collect(&self, force: bool) -> bool {
         self.collect_thread_free();
 
         let Some(local_free) = self.local_free.take() else {
-            return;
+            return !self.is_full();
         };
         let free = if let Some(mut free) = self.free.take() {
             if !force {
@@ -388,7 +388,8 @@ impl<'a> Shard<'a> {
             self.free_is_zero.set(false);
             local_free
         };
-        self.free.set(Some(free))
+        self.free.set(Some(free));
+        true
     }
 }
 
@@ -412,6 +413,7 @@ impl<'a> Shard<'a> {
         let limit = (MAX_EXTEND_SIZE / obj_size).max(MIN_EXTEND);
 
         let count = limit.min(cap_limit - capacity);
+        debug_assert!(count > 0);
 
         let (slab, index) = self.slab();
         // SAFETY: `slab` is valid.
