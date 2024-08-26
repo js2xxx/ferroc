@@ -1,4 +1,4 @@
-#![cfg_attr(not(feature = "base-mmap"), no_std)]
+#![no_std]
 #![feature(allocator_api)]
 #![feature(if_let_guard)]
 #![feature(isqrt)]
@@ -10,9 +10,10 @@
 #![feature(ptr_metadata)]
 #![feature(ptr_sub_ptr)]
 #![feature(strict_provenance)]
+#![cfg_attr(all(feature = "global", feature = "base-mmap"), feature(thread_local))]
 
 #[cfg(test)]
-extern crate alloc;
+extern crate std;
 
 pub mod arena;
 pub mod base;
@@ -30,9 +31,8 @@ pub use self::global::*;
 
 #[cfg(test)]
 mod test {
-    use alloc::vec;
     use core::alloc::Layout;
-    use std::thread;
+    use std::{thread, vec};
 
     use crate::{
         arena::{SHARD_SIZE, SLAB_SIZE},

@@ -7,7 +7,7 @@ use core::{
 use crate::Ferroc;
 
 #[no_mangle]
-#[export_name = "fe_malloc"]
+#[cfg_attr(not(sys_alloc), export_name = "fe_malloc")]
 pub extern "C" fn malloc(size: usize) -> *mut c_void {
     let Ok(layout) = Layout::array::<u8>(size) else {
         return ptr::null_mut();
@@ -18,7 +18,7 @@ pub extern "C" fn malloc(size: usize) -> *mut c_void {
 }
 
 #[no_mangle]
-#[export_name = "fe_posix_memalign"]
+#[cfg_attr(not(sys_alloc), export_name = "fe_posix_memalign")]
 pub unsafe extern "C" fn posix_memalign(
     slot: *mut *mut c_void,
     align: usize,
@@ -38,7 +38,7 @@ pub unsafe extern "C" fn posix_memalign(
 }
 
 #[no_mangle]
-#[export_name = "fe_aligned_alloc"]
+#[cfg_attr(not(sys_alloc), export_name = "fe_aligned_alloc")]
 pub extern "C" fn aligned_alloc(align: usize, size: usize) -> *mut c_void {
     let Ok(layout) = Layout::from_size_align(size, align) else {
         return ptr::null_mut();
@@ -49,7 +49,7 @@ pub extern "C" fn aligned_alloc(align: usize, size: usize) -> *mut c_void {
 }
 
 #[no_mangle]
-#[export_name = "fe_malloc_usable_size"]
+#[cfg_attr(not(sys_alloc), export_name = "fe_malloc_usable_size")]
 pub unsafe extern "C" fn malloc_usable_size(ptr: *mut c_void) -> usize {
     match NonNull::new(ptr) {
         Some(ptr) => Ferroc.layout_of(ptr.cast()).map_or(0, |l| l.size()),
@@ -58,7 +58,7 @@ pub unsafe extern "C" fn malloc_usable_size(ptr: *mut c_void) -> usize {
 }
 
 #[no_mangle]
-#[export_name = "fe_free"]
+#[cfg_attr(not(sys_alloc), export_name = "fe_free")]
 pub unsafe extern "C" fn free(ptr: *mut c_void) {
     if let Some(ptr) = NonNull::new(ptr) {
         unsafe { Ferroc.free(ptr.cast()) }
@@ -66,7 +66,7 @@ pub unsafe extern "C" fn free(ptr: *mut c_void) {
 }
 
 #[no_mangle]
-#[export_name = "fe_calloc"]
+#[cfg_attr(not(sys_alloc), export_name = "fe_calloc")]
 pub extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
     let Some(size) = nmemb.checked_mul(size) else {
         return ptr::null_mut();
@@ -80,7 +80,7 @@ pub extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
 }
 
 #[no_mangle]
-#[export_name = "fe_realloc"]
+#[cfg_attr(not(sys_alloc), export_name = "fe_realloc")]
 pub unsafe extern "C" fn realloc(ptr: *mut c_void, new_size: usize) -> *mut c_void {
     let Some(ptr) = NonNull::new(ptr) else {
         return malloc(new_size);
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn realloc(ptr: *mut c_void, new_size: usize) -> *mut c_vo
 }
 
 #[no_mangle]
-#[export_name = "fe_strdup"]
+#[cfg_attr(not(sys_alloc), export_name = "fe_strdup")]
 pub unsafe extern "C" fn strdup(s: *const c_char) -> *mut c_char {
     let len = libc::strlen(s);
     let ptr = malloc(len + 1).cast::<c_char>();
@@ -117,7 +117,7 @@ pub unsafe extern "C" fn strdup(s: *const c_char) -> *mut c_char {
 }
 
 #[no_mangle]
-#[export_name = "fe_strndup"]
+#[cfg_attr(not(sys_alloc), export_name = "fe_strndup")]
 pub unsafe extern "C" fn strndup(s: *const c_char, n: usize) -> *mut c_char {
     let len = libc::strnlen(s, n);
     let ptr = malloc(len + 1).cast::<c_char>();
@@ -129,7 +129,7 @@ pub unsafe extern "C" fn strndup(s: *const c_char, n: usize) -> *mut c_char {
 }
 
 #[no_mangle]
-#[export_name = "fe_realpath"]
+#[cfg_attr(not(sys_alloc), export_name = "fe_realpath")]
 pub unsafe extern "C" fn realpath(name: *const c_char, resolved: *mut c_char) -> *mut c_char {
     if !resolved.is_null() {
         return libc::realpath(name, resolved);
