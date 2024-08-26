@@ -115,7 +115,7 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
             let bucket_count = 1 << bucket_index;
             for _ in 0..bucket_count {
                 unsafe { ptr::drop_in_place(bucket) };
-                bucket = bucket.add(1);
+                bucket = unsafe { bucket.add(1) };
             }
             unsafe { this.chunk.get_mut().assume_init_drop() }
             return true;
@@ -184,10 +184,13 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     /// and may or may not be recycled.
     pub unsafe fn get(self: Pin<&Self>, id: NonZeroU64) -> Pin<&Heap<'arena, '_, B>> {
         let bi = BucketIndex::from_id(id);
-        self.map_unchecked(|this| {
-            // SAFETY: the thread data entry is initialized in `self.assign`.
-            this.get_inner(bi).unwrap_unchecked()
-        })
+        // SAFETY: Any data is not moved.
+        unsafe {
+            self.map_unchecked(|this| {
+                // SAFETY: the thread data entry is initialized in `self.assign`.
+                this.get_inner(bi).unwrap_unchecked()
+            })
+        }
     }
 
     /// Acquires a new thread id and initialize its associated heap.
@@ -295,26 +298,26 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
 impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     #[inline]
     unsafe fn bucket_slot(&self, bi: BucketIndex) -> &Bucket<'arena, B> {
-        self.buckets.get_unchecked(bi.bucket)
+        unsafe { self.buckets.get_unchecked(bi.bucket) }
     }
 
     #[inline]
     unsafe fn entry(&self, bi: BucketIndex) -> Option<&Entry<'arena, B>> {
-        let bucket = self.bucket_slot(bi).pointer.load(Acquire);
+        let bucket = unsafe { self.bucket_slot(bi) }.pointer.load(Acquire);
         if bucket.is_null() {
             return None;
         }
-        Some(&*bucket.add(bi.index))
+        Some(unsafe { &*bucket.add(bi.index) })
     }
 
     #[inline]
     unsafe fn get_inner(&self, bi: BucketIndex) -> Option<&Heap<'arena, 'arena, B>> {
-        Some(&self.entry(bi)?.heap)
+        Some(&unsafe { self.entry(bi) }?.heap)
     }
 
     #[cold]
     unsafe fn insert(&self, bi: BucketIndex) -> &Heap<'arena, 'arena, B> {
-        let bucket_slot = self.bucket_slot(bi);
+        let bucket_slot = unsafe { self.bucket_slot(bi) };
         let bucket = bucket_slot.pointer.load(Acquire);
 
         let bucket = if bucket.is_null() {
@@ -328,7 +331,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
                 Acquire,
             ) {
                 Ok(_) => {
-                    (*bucket_slot.chunk.get()).write(chunk);
+                    unsafe { (*bucket_slot.chunk.get()).write(chunk) };
                     new_bucket.as_ptr()
                 }
                 Err(already_init) => already_init,
@@ -336,7 +339,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
         } else {
             bucket
         };
-        &(*bucket.add(bi.index)).heap
+        unsafe { &(*bucket.add(bi.index)).heap }
     }
 }
 
@@ -416,7 +419,7 @@ impl<'arena, B: BaseAlloc> Drop for ThreadLocal<'arena, B> {
 /// above as the global allocator will result in infinite recursion. If a global
 /// allocator is desired, consider using this crate's [`config`](crate::config)
 /// macros instead.
-pub struct ThreadData<'t, 'arena: 't, B: BaseAlloc> {
+pub struct ThreadData<'t, 'arena, B: BaseAlloc> {
     thread_local: Pin<&'t ThreadLocal<'arena, B>>,
     heap: Pin<&'t Heap<'arena, 't, B>>,
     id: NonZeroU64,
@@ -444,7 +447,7 @@ unsafe impl<'t, 'arena: 't, B: BaseAlloc> Allocator for ThreadData<'t, 'arena, B
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        Allocator::deallocate(&**self, ptr, layout)
+        unsafe { Allocator::deallocate(&**self, ptr, layout) }
     }
 }
 

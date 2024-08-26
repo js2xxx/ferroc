@@ -151,9 +151,10 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
     ///
     /// `ptr` must be a pointer within the range of `this`.
     pub(crate) unsafe fn shard_meta(this: NonNull<Self>, ptr: NonNull<()>) -> NonNull<Shard<'a>> {
-        let shards = ptr::addr_of!((*this.as_ptr()).shards);
+        // SAFETY: `ptr` is within the range of `this`.
+        let shards = unsafe { ptr::addr_of!((*this.as_ptr()).shards) };
         let index = (ptr.addr().get() - this.addr().get()) / SHARD_SIZE;
-        let shard = shards.cast::<Shard<'a>>().add(index);
+        let shard = unsafe { shards.cast::<Shard<'a>>().add(index) };
         let primary_offset = unsafe { (*ptr::addr_of!((*shard).primary_offset)).get() };
         let primary_shard = unsafe { shard.byte_sub(primary_offset as usize) };
         unsafe { NonNull::new_unchecked(primary_shard.cast_mut()) }
@@ -171,40 +172,43 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
     ) -> SlabRef<'a, B> {
         let slab = ptr.cast::<Self>().as_ptr();
         let header_count =
-            mem::size_of_val(ptr.cast::<Self>().as_uninit_ref()).div_ceil(SHARD_SIZE);
+            mem::size_of_val(unsafe { ptr.cast::<Self>().as_uninit_ref() }).div_ceil(SHARD_SIZE);
         assert_eq!(header_count, Self::HEADER_COUNT);
 
-        addr_of_mut!((*slab).thread_id).write(thread_id);
-        addr_of_mut!((*slab).source).write(source);
-        addr_of_mut!((*slab).size).write(ptr.len());
-        addr_of_mut!((*slab).used).write(Cell::new(0));
-        addr_of_mut!((*slab).abandoned).write(Cell::new(0));
+        // SAFETY: `ptr` is fresh allocated and unique.
+        unsafe {
+            addr_of_mut!((*slab).thread_id).write(thread_id);
+            addr_of_mut!((*slab).source).write(source);
+            addr_of_mut!((*slab).size).write(ptr.len());
+            addr_of_mut!((*slab).used).write(Cell::new(0));
+            addr_of_mut!((*slab).abandoned).write(Cell::new(0));
 
-        let shards: &mut [MaybeUninit<Shard<'a>>; SHARD_COUNT] = mem::transmute(
-            addr_of_mut!((*slab).shards)
-                .as_uninit_mut()
-                .unwrap_unchecked(),
-        );
+            let shards: &mut [MaybeUninit<Shard<'a>>; SHARD_COUNT] = mem::transmute(
+                addr_of_mut!((*slab).shards)
+                    .as_uninit_mut()
+                    .unwrap_unchecked(),
+            );
 
-        let (first, rest) = shards[Self::HEADER_COUNT..]
-            .split_first_mut()
-            .unwrap_unchecked();
+            let (first, rest) = shards[Self::HEADER_COUNT..]
+                .split_first_mut()
+                .unwrap_unchecked();
 
-        first.write(Shard::new(
-            ptr.cast::<Self>(),
-            Self::HEADER_COUNT,
-            Self::HEADER_COUNT,
-            SHARD_COUNT - Self::HEADER_COUNT,
-            free_is_zero,
-        ));
-        for (index, s) in rest.iter_mut().enumerate() {
-            s.write(Shard::new(
+            first.write(Shard::new(
                 ptr.cast::<Self>(),
-                index + Self::HEADER_COUNT + 1,
                 Self::HEADER_COUNT,
-                0,
+                Self::HEADER_COUNT,
+                SHARD_COUNT - Self::HEADER_COUNT,
                 free_is_zero,
             ));
+            for (index, s) in rest.iter_mut().enumerate() {
+                s.write(Shard::new(
+                    ptr.cast::<Self>(),
+                    index + Self::HEADER_COUNT + 1,
+                    Self::HEADER_COUNT,
+                    0,
+                    free_is_zero,
+                ));
+            }
         }
 
         SlabRef(ptr.cast(), PhantomData)
@@ -328,7 +332,8 @@ impl ShardFlags {
     }
 
     pub(crate) unsafe fn has_aligned(this: *const ShardFlags) -> bool {
-        (*ptr::addr_of!((*this).0)).get() & Self::HAS_ALIGNED != 0
+        // SAFETY: No explicit reference is created.
+        (unsafe { (*ptr::addr_of!((*this).0)).get() }) & Self::HAS_ALIGNED != 0
     }
 
     pub(crate) fn reset(&self) {
@@ -366,7 +371,7 @@ impl ShardFlags {
     }
 
     pub(crate) unsafe fn has_aligned(this: *const ShardFlags) -> bool {
-        (*ptr::addr_of!((*this).0)).load(Relaxed) & Self::HAS_ALIGNED != 0
+        (unsafe { (*ptr::addr_of!((*this).0)).load(Relaxed) }) & Self::HAS_ALIGNED != 0
     }
 
     pub(crate) fn reset(&self) {
@@ -424,7 +429,8 @@ impl<'a> Shard<'a> {
             header: ShardHeader {
                 #[cfg(miri)]
                 slab: slab.cast(),
-                shard_area: Slab::shard_area(slab, index),
+                // SAFETY: slab is valid.
+                shard_area: unsafe { Slab::shard_area(slab, index) },
                 marker: PhantomData,
             },
             shard_count: Cell::new(shard_count as u32),
@@ -735,7 +741,7 @@ impl<'a> Shard<'a> {
     pub(crate) unsafe fn block_of(this: NonNull<Self>, ptr: NonNull<()>) -> BlockRef<'a> {
         // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
         // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
-        let ptr = if !ShardFlags::has_aligned(ptr::addr_of!((*this.as_ptr()).flags)) {
+        let ptr = if !unsafe { ShardFlags::has_aligned(ptr::addr_of!((*this.as_ptr()).flags)) } {
             ptr
         } else {
             // SAFETY: `this` is valid.
@@ -891,7 +897,7 @@ impl<'a> Shard<'a> {
         Ok(next_shard)
     }
 
-    pub(crate) fn fini<B: BaseAlloc + 'a>(&self) -> Result<Option<&Self>, SlabRef<B>> {
+    pub(crate) fn fini<B: BaseAlloc + 'a>(&self) -> Result<Option<&Self>, SlabRef<'_, B>> {
         #[cfg(debug_assertions)]
         debug_assert!(!self.link.is_linked());
         self.set_delayed_tag(NEVER, usize::MAX);

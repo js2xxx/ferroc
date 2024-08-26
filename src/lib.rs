@@ -128,6 +128,9 @@
 //! If you want to replace the default `malloc` implementation, the `c-override`
 //! feature can be enabled.
 #![no_std]
+#![deny(future_incompatible)]
+#![deny(rust_2018_idioms)]
+#![deny(rust_2024_compatibility)]
 #![warn(missing_docs)]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
@@ -157,7 +160,8 @@ macro_rules! forward {
         #[no_mangle]
         #[cfg(feature = "c-override")]
         pub unsafe extern "C" fn $name($($aname: $atype),*) $(-> $ret)? {
-            $target($($aname),*)
+            #[allow(unused_unsafe)]
+            unsafe { $target($($aname),*) }
         }
     };
     ($($name:ident($($aname:ident: $atype:ty),*) $(-> $ret:ty)? => $target:ident;)*) => {

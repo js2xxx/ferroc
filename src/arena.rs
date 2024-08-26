@@ -187,12 +187,12 @@ impl<B: BaseAlloc> Arena<B> {
         thread_id: usize,
         count: usize,
         base: &B,
-    ) -> Option<Result<SlabRef<B>, Error<B>>> {
+    ) -> Option<Result<SlabRef<'_, B>, Error<B>>> {
         let ptr = self.allocate_slices(count)?;
 
         let (addr, _) = ptr.to_raw_parts();
         if let Err(err) =
-            unsafe { base.commit(NonNull::from_raw_parts(addr, mem::size_of::<Slab<B>>())) }
+            unsafe { base.commit(NonNull::from_raw_parts(addr, mem::size_of::<Slab<'_, B>>())) }
         {
             return Some(Err(Error::Commit(err)));
         }
@@ -212,7 +212,7 @@ impl<B: BaseAlloc> Arena<B> {
     /// - `slab` must be previously allocated from this arena;
     /// - No more references to the `slab` or its shards exist after calling
     ///   this function.
-    unsafe fn deallocate(&self, slab: SlabRef<B>, base: &B) -> usize {
+    unsafe fn deallocate(&self, slab: SlabRef<'_, B>, base: &B) -> usize {
         let raw = slab.into_raw();
         unsafe { base.decommit(raw) };
         let (ptr, len) = raw.to_raw_parts();
@@ -294,7 +294,7 @@ impl<B: BaseAlloc> Arenas<B> {
         }
     }
 
-    fn push_abandoned(&self, slab: SlabRef<B>) {
+    fn push_abandoned(&self, slab: SlabRef<'_, B>) {
         debug_assert!(slab.is_abandoned());
         let mut next = self.abandoned.load(Relaxed);
         loop {
@@ -311,7 +311,7 @@ impl<B: BaseAlloc> Arenas<B> {
         }
     }
 
-    fn push_abandoned_visited(&self, slab: SlabRef<B>) {
+    fn push_abandoned_visited(&self, slab: SlabRef<'_, B>) {
         let mut next = self.abandoned_visited.load(Relaxed);
         loop {
             slab.abandoned_next.store(next, Relaxed);
@@ -347,7 +347,7 @@ impl<B: BaseAlloc> Arenas<B> {
 
         let mut last = first;
         let last = loop {
-            let next = unsafe { (*last.cast::<Slab<B>>()).abandoned_next.load(Relaxed) };
+            let next = unsafe { (*last.cast::<Slab<'_, B>>()).abandoned_next.load(Relaxed) };
             last = match next.is_null() {
                 true => break last,
                 false => next,
@@ -357,7 +357,7 @@ impl<B: BaseAlloc> Arenas<B> {
         let mut next = self.abandoned.load(Relaxed);
         loop {
             unsafe {
-                (*last.cast::<Slab<B>>())
+                (*last.cast::<Slab<'_, B>>())
                     .abandoned_next
                     .store(next, Relaxed)
             };
@@ -373,7 +373,7 @@ impl<B: BaseAlloc> Arenas<B> {
         true
     }
 
-    fn pop_abandoned(&self) -> Option<SlabRef<B>> {
+    fn pop_abandoned(&self) -> Option<SlabRef<'_, B>> {
         let mut next = self.abandoned.load(Relaxed);
         if next.is_null() && !self.reappend_abandoned_visited() {
             return None;
@@ -381,7 +381,7 @@ impl<B: BaseAlloc> Arenas<B> {
         next = self.abandoned.load(Relaxed);
         let ret = loop {
             let ptr = NonNull::new(next)?;
-            let new_next = unsafe { (*next.cast::<Slab<B>>()).abandoned_next.load(Relaxed) };
+            let new_next = unsafe { (*next.cast::<Slab<'_, B>>()).abandoned_next.load(Relaxed) };
             match self
                 .abandoned
                 .compare_exchange_weak(next, new_next, AcqRel, Acquire)
@@ -404,7 +404,7 @@ impl<B: BaseAlloc> Arenas<B> {
         }
     }
 
-    fn try_reclaim(&self, thread_id: usize, count: usize, align: usize) -> Option<SlabRef<B>> {
+    fn try_reclaim(&self, thread_id: usize, count: usize, align: usize) -> Option<SlabRef<'_, B>> {
         const MAX_TRIAL: usize = 8;
         let mut trial = MAX_TRIAL;
         while trial > 0
@@ -477,7 +477,7 @@ impl<B: BaseAlloc> Arenas<B> {
         count: NonZeroUsize,
         align: usize,
         direct: bool,
-    ) -> Result<SlabRef<B>, Error<B>> {
+    ) -> Result<SlabRef<'_, B>, Error<B>> {
         let count = count.get();
 
         if let Some(reclaimed) = self.try_reclaim(thread_id, count, align) {
@@ -518,7 +518,7 @@ impl<B: BaseAlloc> Arenas<B> {
     /// # Safety
     ///
     /// `slab` must be previously allocated from this structure;
-    pub(crate) unsafe fn deallocate(&self, slab: SlabRef<B>) {
+    pub(crate) unsafe fn deallocate(&self, slab: SlabRef<'_, B>) {
         if !slab.is_abandoned() {
             match &slab.source {
                 &SlabSource::Arena(id) => {

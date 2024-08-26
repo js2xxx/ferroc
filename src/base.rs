@@ -128,7 +128,7 @@ impl<B: BaseAlloc> Chunk<B> {
     ///
     /// # Safety
     ///
-    /// `ptr` must points to a valid & owned block of memory of `layout`, and
+    /// `ptr` must point to a valid & owned block of memory of `layout`, and
     /// must be allocated from `base`.
     pub const unsafe fn new(ptr: NonNull<u8>, layout: Layout, handle: B::Handle) -> Self {
         assert!(
@@ -142,13 +142,14 @@ impl<B: BaseAlloc> Chunk<B> {
     ///
     /// # Safety
     ///
-    /// `ptr` must points to a valid, owned & static block of memory of
+    /// `ptr` must point to a valid, owned & static block of memory of
     /// `layout`.
     pub const unsafe fn from_static(ptr: NonNull<u8>, layout: Layout) -> Self
     where
         B: BaseAlloc<Handle = StaticHandle>,
     {
-        Self::new(ptr, layout, StaticHandle)
+        // SAFETY: `ptr` points to a valid, owned block of memory of `layout`.
+        unsafe { Self::new(ptr, layout, StaticHandle) }
     }
 
     /// Retrieves the layout information of this chunk.

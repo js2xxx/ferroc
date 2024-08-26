@@ -20,14 +20,16 @@ impl Mmap {
     }
 }
 
+// Set as `std::io::RawOsError` so as to get rid of direct `std` dependency.
+#[cfg(not(target_os = "uefi"))]
+type RawOsError = i32;
+#[cfg(target_os = "uefi")]
+type RawOsError = usize;
+
 unsafe impl BaseAlloc for Mmap {
     const IS_ZEROED: bool = true;
 
-    // Set as `std::io::RawOsError` so as to get rid of direct `std` dependency.
-    #[cfg(not(target_os = "uefi"))]
-    type Error = i32;
-    #[cfg(target_os = "uefi")]
-    type Error = usize;
+    type Error = RawOsError;
 
     type Handle = ManuallyDrop<MmapMut>;
 
@@ -72,7 +74,7 @@ unsafe impl BaseAlloc for Mmap {
         // SAFETY: The corresponding memory area is going to be used.
         match unsafe { libc::madvise(ptr.as_ptr().cast(), len, libc::MADV_WILLNEED) } {
             0 => Ok(()),
-            _ => Err(unsafe { *libc::__errno_location() }),
+            _ => Err(errno()),
         }
     }
 
@@ -82,4 +84,50 @@ unsafe impl BaseAlloc for Mmap {
         // SAFETY: The corresponding memory area is going to be disposed.
         unsafe { libc::madvise(ptr.as_ptr().cast(), len, libc::MADV_DONTNEED) };
     }
+}
+
+#[cfg(all(unix, not(miri)))]
+/// Returns the platform-specific value of errno
+pub fn errno() -> RawOsError {
+    extern "C" {
+        #[cfg_attr(
+            any(
+                target_os = "linux",
+                target_os = "emscripten",
+                target_os = "fuchsia",
+                target_os = "l4re",
+                target_os = "hurd",
+            ),
+            link_name = "__errno_location"
+        )]
+        #[cfg_attr(
+            any(
+                target_os = "netbsd",
+                target_os = "openbsd",
+                target_os = "android",
+                target_os = "redox",
+                target_env = "newlib"
+            ),
+            link_name = "__errno"
+        )]
+        #[cfg_attr(
+            any(target_os = "solaris", target_os = "illumos"),
+            link_name = "___errno"
+        )]
+        #[cfg_attr(target_os = "nto", link_name = "__get_errno_ptr")]
+        #[cfg_attr(
+            any(
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "tvos",
+                target_os = "freebsd",
+                target_os = "watchos"
+            ),
+            link_name = "__error"
+        )]
+        #[cfg_attr(target_os = "haiku", link_name = "_errnop")]
+        #[cfg_attr(target_os = "aix", link_name = "_Errno")]
+        fn errno_location() -> *mut RawOsError;
+    }
+    unsafe { *errno_location() }
 }

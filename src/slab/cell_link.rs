@@ -4,7 +4,7 @@ pub trait CellLinked<'a> {
     fn link(&'a self) -> &'a CellLink<'a, Self>;
 }
 
-pub struct CellLink<'a, T: 'a + ?Sized> {
+pub struct CellLink<'a, T: ?Sized> {
     #[cfg(debug_assertions)]
     linked_to: Cell<usize>,
     prev: Cell<Option<&'a T>>,
@@ -47,7 +47,7 @@ impl<'a, T> Default for CellLink<'a, T> {
     }
 }
 
-pub struct CellList<'a, T: 'a + ?Sized> {
+pub struct CellList<'a, T: ?Sized> {
     head: Cell<Option<&'a T>>,
     tail: Cell<Option<&'a T>>,
     #[cfg(debug_assertions)]

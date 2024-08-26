@@ -234,7 +234,7 @@ impl<'arena> Bin<'arena> {
 /// By far, only 1 heap may exist from 1 context.
 ///
 /// See [the crate-level documentation](crate) for its usage.
-pub struct Heap<'arena: 'cx, 'cx, B: BaseAlloc> {
+pub struct Heap<'arena, 'cx, B: BaseAlloc> {
     cx: Option<Pin<&'cx Context<'arena, B>>>,
     direct_shards: [Cell<&'arena Shard<'arena>>; DIRECT_COUNT],
     shards: [Bin<'arena>; OBJ_SIZE_COUNT],
@@ -473,7 +473,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             return Some(shard);
         }
 
-        self.find_free_from_all(bin, first_try)
+        // SAFETY: `cx` is initialized.
+        unsafe { self.find_free_from_all(bin, first_try) }
     }
 
     /// # Safety
@@ -484,18 +485,21 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         self.try_free_delayed(false);
 
         if size > ObjSizeType::LARGE_MAX {
-            return self.pop_huge(size, zero);
+            // SAFETY: The heap is initialized.
+            return unsafe { self.pop_huge(size, zero) };
         }
 
         let index = obj_size_index(size);
         debug_assert!(index < OBJ_SIZE_COUNT);
         let bin = unsafe { self.shards.get_unchecked(index) };
 
-        let shard = if let Some(shard) = self.find_free(bin, true) {
+        // SAFETY: `cx` is initialized.
+        let shard = if let Some(shard) = unsafe { self.find_free(bin, true) } {
             shard
         } else {
             self.collect_cold();
-            self.find_free(bin, false)?
+            // SAFETY: `cx` is initialized.
+            unsafe { self.find_free(bin, false) }?
         };
 
         // SAFETY: `shard` has free blocks.
@@ -521,7 +525,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             return Some(Self::post_alloc(block, layout.size(), zero, shard));
         }
 
-        self.pop_aligned_contended(layout, zero, fallback)
+        // SAFETY: `fallback` returns an initialized heap.
+        unsafe { self.pop_aligned_contended(layout, zero, fallback) }
     }
 
     /// # Safety
@@ -536,7 +541,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     ) -> Option<NonNull<()>> {
         if layout.align() <= ObjSizeType::LARGE_MAX {
             let oversize = layout.size() + layout.align() - 1;
-            let overptr = self.pop(oversize, zero, fallback)?.cast();
+            // SAFETY: `fallback` returns an initialized heap.
+            let overptr = unsafe { self.pop(oversize, zero, fallback) }?.cast();
 
             let addr = (overptr.addr().get() + layout.align() - 1) & !(layout.align() - 1);
             let ptr = overptr.with_addr(NonZeroUsize::new(addr).unwrap());
@@ -569,11 +575,13 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             return Some(layout.dangling().cast());
         }
         if layout.size() <= ObjSizeType::MEDIUM_MAX && layout.size() & (layout.align() - 1) == 0 {
-            return (self.pop(layout.size(), zero, fallback))
+            // SAFETY: `fallback` returns an initialized heap.
+            return (unsafe { self.pop(layout.size(), zero, fallback) })
                 .inspect(|p| debug_assert!(p.is_aligned_to(layout.align())));
         }
 
-        self.pop_aligned(layout, zero, fallback)
+        // SAFETY: `fallback` returns an initialized heap.
+        unsafe { self.pop_aligned(layout, zero, fallback) }
             .inspect(|p| debug_assert!(p.is_aligned_to(layout.align())))
     }
 
@@ -612,7 +620,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         zero: bool,
         fallback: impl FnOnce() -> &'a Self,
     ) -> Option<NonNull<()>> {
-        self.pop(size, zero, fallback)
+        unsafe { self.pop(size, zero, fallback) }
     }
 
     /// Allocate a memory block of `layout`.
@@ -662,8 +670,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
         // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
         let slab = unsafe { Slab::<B>::from_ptr(ptr).unwrap_unchecked() };
-        // SAFETY: The same as `shard_meta`.
-        let shard = Slab::shard_meta(slab, ptr.cast());
+        // SAFETY: The same as `Slab::from_ptr`.
+        let shard = unsafe { Slab::shard_meta(slab, ptr.cast()) };
         let obj_size = unsafe { Shard::obj_size_raw(shard) };
         // SAFETY: `ptr` is in `shard`.
         let block = unsafe { Shard::block_of(shard, ptr.cast()) };
@@ -689,7 +697,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
         #[cfg(debug_assertions)]
         {
-            let tested_layout = self.layout_of(ptr);
+            // SAFETY: The allocation size is not 0.
+            let tested_layout = unsafe { self.layout_of(ptr) };
             assert!(
                 tested_layout.size() >= layout.size(),
                 "the layout validation of allocation at {ptr:p} failed:\n\
@@ -712,7 +721,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// `cx` must be initialized.
     unsafe fn free_shard(&self, shard: &'arena Shard<'arena>, obj_size: usize) {
         debug_assert!(shard.is_unused());
-        let cx = self.cx.unwrap_unchecked();
+        debug_assert!(self.cx.is_some());
+        // SAFETY: `cx` is initialized.
+        let cx = unsafe { self.cx.unwrap_unchecked() };
 
         debug_assert_eq!(obj_size, shard.obj_size.load(Relaxed));
         if obj_size <= ObjSizeType::LARGE_MAX {
@@ -823,13 +834,14 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
                 // SAFETY: flags is zero, this shard has no aligned blocks.
                 if shard.push_block(unsafe { BlockRef::from_raw(ptr.cast()) }) {
-                    self.free_shard(shard, shard.obj_size.load(Relaxed))
+                    // SAFETY: `cx` is initialized to have performed the allocation above.
+                    unsafe { self.free_shard(shard, shard.obj_size.load(Relaxed)) }
                 }
             } else {
-                self.free_contended(ptr, shard.into(), true)
+                unsafe { self.free_contended(ptr, shard.into(), true) }
             }
         } else {
-            self.free_contended(ptr, shard, false)
+            unsafe { self.free_contended(ptr, shard, false) }
         }
     }
 
@@ -846,7 +858,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         if is_local {
             let shard = unsafe { shard.as_ref() };
 
-            self.free_block(shard, block);
+            // SAFETY: `cx` is initialized to have performed the allocation above.
+            unsafe { self.free_block(shard, block) };
         } else {
             // We're deallocating from another thread.
             unsafe { Shard::push_block_mt(shard, block) }
@@ -860,7 +873,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     unsafe fn free_block(&self, shard: &'arena Shard<'arena>, block: BlockRef<'arena>) {
         let is_unused = shard.push_block(block);
         if is_unused {
-            self.free_shard(shard, shard.obj_size.load(Relaxed))
+            // SAFETY: `cx` is initialized.
+            unsafe { self.free_shard(shard, shard.obj_size.load(Relaxed)) }
         } else if shard.flags.is_in_full() {
             debug_assert!(!is_unused);
 
@@ -942,7 +956,7 @@ unsafe impl<'arena: 'cx, 'cx, B: BaseAlloc> Allocator for Heap<'arena, 'cx, B> {
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        self.deallocate(ptr, layout);
+        unsafe { self.deallocate(ptr, layout) };
     }
 }
 
