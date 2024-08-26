@@ -253,7 +253,7 @@ pub(crate) struct EmptyShard(Shard<'static>);
 
 impl EmptyShard {
     pub(crate) const fn as_ref(&self) -> &Shard<'_> {
-        let ptr = &self.0 as *const Shard<'static>;
+        let ptr: *const Shard<'static> = ptr::from_ref(&self.0);
         // The inability to mutate the inner shard ensures that EMPTY shards are
         // covariant.
         unsafe { &*ptr.cast::<Shard<'_>>() }
@@ -731,7 +731,7 @@ impl<'a> Shard<'a> {
             header_slab.as_ref()
         };
         // SAFETY: `self` must reside in the `shards` array in its `Slab`.
-        let index = unsafe { (self as *const Self).sub_ptr(slab.shards.as_ptr()) };
+        let index = unsafe { ptr::from_ref(self).sub_ptr(slab.shards.as_ptr()) };
         (slab, index)
     }
 

@@ -153,7 +153,8 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
     }
 
     fn thread_id(self: Pin<&Self>) -> usize {
-        (&*self as *const Self).addr()
+        let ptr: *const Self = ptr::from_ref(&self);
+        ptr.addr()
     }
 
     fn alloc_slab(
