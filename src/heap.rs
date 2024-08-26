@@ -51,20 +51,11 @@ const fn direct_index(size: usize) -> usize {
 ///
 /// This function is the inverse function of [`obj_size`].
 pub const fn obj_size_index(size: usize) -> usize {
-    match size - 1 {
-        #[cfg(feature = "finer-grained")]
-        size_m1 @ 0..=63 => size_m1 >> 3,
-        #[cfg(not(feature = "finer-grained"))]
-        size_m1 @ 0..=63 => size_m1 >> 4,
-        size_m1 => {
-            let msb_m2 = (usize::BITS - size_m1.leading_zeros() - 3) as usize;
-
-            #[cfg(feature = "finer-grained")]
-            return ((msb_m2 - 2) << 2) + ((size_m1 >> msb_m2) & 3);
-            #[cfg(not(feature = "finer-grained"))]
-            {
-                ((msb_m2 - 3) << 2) + ((size_m1 >> msb_m2) & 3)
-            }
+    match (size + GRANULARITY - 1) >> GRANULARITY_SHIFT {
+        index @ 0..=7 => index,
+        ssize => {
+            let sft = usize::BITS - ssize.leading_zeros() - 4;
+            ((ssize - 1) >> sft) + (sft << 3) as usize + 1
         }
     }
 }
@@ -73,16 +64,10 @@ pub const fn obj_size_index(size: usize) -> usize {
 ///
 /// This function is the inverse function of [`obj_size_index`].
 pub const fn obj_size(index: usize) -> usize {
-    #[cfg(feature = "finer-grained")]
-    return match index {
-        0..=6 => (index + 1) << 3,
-        i => (64 + (((i - 7) & 3) << 4)) << ((i - 7) >> 2),
-    };
-    #[cfg(not(feature = "finer-grained"))]
-    match index {
-        0..=2 => (index + 1) << 4,
-        i => (64 + (((i - 3) & 3) << 4)) << ((i - 3) >> 2),
-    }
+    (match index {
+        0..=7 => index,
+        i => (8 + ((i - 8) & 7)) << ((i - 8) >> 3),
+    }) << GRANULARITY_SHIFT
 }
 
 /// Gets the type of a specific object size.
@@ -199,6 +184,31 @@ struct Bin<'arena> {
     max_direct_index: usize,
 }
 
+impl<'arena> Bin<'arena> {
+    const fn new(index: usize) -> Self {
+        const fn const_max(a: usize, b: usize) -> usize {
+            if a > b {
+                a
+            } else {
+                b
+            }
+        }
+
+        // Bin #0 is identical to bin #1...
+        let obj_size = const_max(obj_size(index), GRANULARITY);
+        Bin {
+            list: ShardList::DEFAULT,
+            obj_size,
+            min_direct_index: if index <= 1 {
+                0 // ... so we here specify the same value for them.
+            } else {
+                direct_index(self::obj_size(index - 1)) + 1
+            },
+            max_direct_index: direct_index(obj_size),
+        }
+    }
+}
+
 /// A memory allocator unit of ferroc.
 ///
 /// This type serves as the most direct interface exposed to users compared with
@@ -257,22 +267,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     pub const fn new_uninit() -> Self {
         Heap {
             cx: None,
-            direct_shards: array![
-                _ => Cell::new(EMPTY_SHARD.as_ref());
-                DIRECT_COUNT
-            ],
-            shards: array![
-                index => Bin {
-                    list: ShardList::DEFAULT,
-                    obj_size: obj_size(index),
-                    min_direct_index: match index.checked_sub(1) {
-                        None => 0,
-                        Some(index_m1) => direct_index(obj_size(index_m1)) + 1
-                    },
-                    max_direct_index: direct_index(obj_size(index)),
-                };
-                OBJ_SIZE_COUNT
-            ],
+            direct_shards: array![_ => Cell::new(EMPTY_SHARD.as_ref()); DIRECT_COUNT],
+            shards: array![index => Bin::new(index); OBJ_SIZE_COUNT],
             full_shards: ShardList::DEFAULT,
             huge_shards: ShardList::DEFAULT,
         }
@@ -412,7 +408,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             }
 
             cursor.move_next();
-            
+
             shard.flags.set_in_full(true);
             bin.list.requeue_to(shard, &self.full_shards);
             self.update_direct(bin);
@@ -503,7 +499,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             Huge => return self.pop_huge(size, set_align, zero, || unreachable!(), err_sink),
             ty => matches!(ty, Large),
         };
-        let index = obj_size_index(size.max(1));
+        let index = obj_size_index(size);
         debug_assert!(index < OBJ_SIZE_COUNT);
         let bin = unsafe { self.shards.get_unchecked(index) };
 
@@ -711,8 +707,18 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         #[cfg(debug_assertions)]
         {
             let tested_layout = self.layout_of(ptr);
-            debug_assert!(tested_layout.size() >= layout.size());
-            debug_assert!(tested_layout.align() >= layout.align());
+            assert!(
+                tested_layout.size() >= layout.size(),
+                "the layout validation of allocation at {ptr:p} failed:\n\
+                \trequest: {layout:?}\n\
+                \tcalculated: {layout:?}"
+            );
+            assert!(
+                tested_layout.align() >= layout.align(),
+                "the layout validation of allocation at {ptr:p} failed:\n\
+                \trequest: {layout:?}\n\
+                \tcalculated: {layout:?}"
+            );
         }
         // SAFETY: `ptr` is allocated by these structures.
         unsafe { self.free(ptr) }
@@ -940,28 +946,20 @@ impl<F, E> AllocateOptions<F, E> {
 
 #[cfg(test)]
 mod tests {
-    use crate::heap::{obj_size, obj_size_index, GRANULARITY};
+    use crate::heap::{obj_size, obj_size_index, GRANULARITY_SHIFT};
 
     #[test]
     fn test_obj_size() {
-        #[cfg(not(feature = "finer-grained"))]
-        const SIZES: &[usize] = &[
-            16, 32, 48, // A
-            64, 80, 96, 112, // B1
-            128, 160, 192, 224, // B2
-            256, 320, 384, 448, // B3
-        ];
-        #[cfg(feature = "finer-grained")]
-        const SIZES: &[usize] = &[
-            8, 16, 24, 32, 40, 48, 56, // A
-            64, 72, 80, 88, 96, 104, 112, 120, // B1
-            128, 144, 160, 176, 192, 208, 224, 240, // B2
-            256, 288, 320, 352, 384, 416, 448, 480, // B3
-        ];
-        for (index, &size) in SIZES.iter().enumerate() {
-            assert_eq!(obj_size_index(size), index);
-            assert_eq!(obj_size_index(size - GRANULARITY + 1), index);
+        let size_a = (0..8).map(|i| i << GRANULARITY_SHIFT);
+        let size_b = |sft| (8..16usize).map(move |size| size << (sft + GRANULARITY_SHIFT));
+
+        let mut last = 0;
+        for (index, size) in size_a.chain((0..15).flat_map(size_b)).enumerate() {
+            for s in last..=size {
+                assert_eq!(obj_size_index(s), index);
+            }
             assert_eq!(obj_size(index), size);
+            last = size + 1;
         }
     }
 }
