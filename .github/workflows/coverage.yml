@@ -25,6 +25,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: fuzzing-data
+        continue-on-error: true
 
       - name: Install fuzzing utilities
         run: |
