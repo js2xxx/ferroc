@@ -10,13 +10,16 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 
 [features]
 base-mmap = ["dep:region"]
-c = ["global", "base-mmap", "dep:libc"]
-default = ["base-mmap", "global"]
+c = ["global", "base-mmap", "dep:libc", "dep:cbindgen"]
+default = ["base-mmap", "global", "c"]
 global = []
 
 [dependencies]
 libc = {version = "0.2", optional = true}
 region = {version = "3.0", optional = true}
+
+[build-dependencies]
+cbindgen = {version = "0.24", optional = true}
 
 [workspace]
 members = ["fuzz"]

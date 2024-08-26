@@ -259,14 +259,14 @@ impl<'a, B: BaseAlloc> Heap<'a, B> {
     ///   scope, created from the same arena.
     /// - No aliases of `ptr` should exist after the deallocation.
     #[inline]
-    pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+    pub unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) {
         #[cfg(debug_assertions)]
         {
             let tested_layout = self
                 .layout_of(ptr)
                 .expect("`ptr` is not allocated from these arenas");
-            debug_assert!(tested_layout.size() >= layout.size());
-            debug_assert!(tested_layout.align() >= layout.align());
+            debug_assert!(tested_layout.size() >= _layout.size());
+            debug_assert!(tested_layout.align() >= _layout.align());
         }
         // SAFETY: `ptr` is allocated by these structures.
         unsafe { self.free(ptr) }
