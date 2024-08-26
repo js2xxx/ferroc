@@ -1,6 +1,7 @@
 #![no_main]
 #![feature(let_chains)]
 #![feature(ptr_as_uninit)]
+#![feature(ptr_metadata)]
 
 use std::{
     alloc::Layout,
@@ -126,9 +127,10 @@ impl Allocation {
     fn new(size: usize, align: usize, zeroed: bool) -> Option<Self> {
         let layout = Layout::from_size_align(size, align).unwrap();
         let ptr = match zeroed {
-            false => Ferroc.allocate(layout).ok()?,
+            false => NonNull::from_raw_parts(Ferroc.allocate(layout).ok()?, layout.size()),
             true => {
-                let ptr = Ferroc.allocate_zeroed(layout).ok()?;
+                let ptr: NonNull<[u8]> =
+                    NonNull::from_raw_parts(Ferroc.allocate_zeroed(layout).ok()?, layout.size());
                 assert!(unsafe { ptr.as_ref().iter().all(|&b| b == 0) });
                 ptr
             }

@@ -239,11 +239,14 @@ pub struct Heap<'arena: 'cx, 'cx, B: BaseAlloc> {
 }
 
 #[inline]
-pub(crate) fn post_alloc(ptr: NonNull<[u8]>, is_zeroed: bool, zero: bool) {
+pub(crate) fn post_alloc(block: BlockRef, size: usize, is_zeroed: bool, zero: bool) -> NonNull<()> {
+    let ptr = block.into_raw();
+    let ptr_slice = NonNull::from_raw_parts(ptr, size);
     if zero && !is_zeroed {
-        unsafe { ptr.as_uninit_slice_mut().fill(MaybeUninit::zeroed()) };
+        unsafe { ptr_slice.as_uninit_slice_mut().fill(MaybeUninit::zeroed()) };
     }
-    track::allocate(ptr, 0, zero);
+    track::allocate(ptr_slice, 0, zero);
+    ptr
 }
 
 impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
@@ -323,14 +326,14 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         zero: bool,
         stat: &mut Stat,
         fallback: impl FnOnce() -> &'a Self,
-    ) -> Result<NonNull<[u8]>, Error<B>> {
+    ) -> Result<NonNull<()>, Error<B>> {
         unsafe fn pop_huge_inner<B: BaseAlloc>(
             heap: &Heap<B>,
             size: usize,
             set_align: bool,
             zero: bool,
             stat: &mut Stat,
-        ) -> Result<NonNull<[u8]>, Error<B>> {
+        ) -> Result<NonNull<()>, Error<B>> {
             // SAFETY: The heap is initialized.
             let cx = unsafe { heap.cx.unwrap_unchecked() };
 
@@ -349,9 +352,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             if set_align {
                 shard.flags.set_align();
             }
-            let ptr = NonNull::from_raw_parts(block.into_raw(), size);
-            post_alloc(ptr, is_zeroed, zero);
-            Ok(ptr)
+            Ok(post_alloc(block, size, is_zeroed, zero))
         }
         debug_assert!(size > ObjSizeType::LARGE_MAX);
 
@@ -390,7 +391,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         zero: bool,
         stat: &mut Stat,
         fallback: impl FnOnce() -> &'a Self,
-    ) -> Result<NonNull<[u8]>, Error<B>> {
+    ) -> Result<NonNull<()>, Error<B>> {
         if size <= ObjSizeType::SMALL_MAX
             && let direct_index = direct_index(size)
             // SAFETY: `direct_shards` only contains sizes that <= `SMALL_MAX`.
@@ -405,9 +406,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             if set_align {
                 shard.flags.set_align();
             }
-            let ptr = NonNull::from_raw_parts(block.into_raw(), size);
-            post_alloc(ptr, is_zeroed, zero);
-            return Ok(ptr);
+            return Ok(post_alloc(block, size, is_zeroed, zero));
         }
         let heap = if self.is_init() { self } else { fallback() };
         unsafe { heap.pop_contended(size, set_align, zero, stat) }
@@ -452,7 +451,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         set_align: bool,
         zero: bool,
         stat: &mut Stat,
-    ) -> Result<NonNull<[u8]>, Error<B>> {
+    ) -> Result<NonNull<()>, Error<B>> {
         let is_large = match obj_size_type(size) {
             Huge => return self.pop_huge(size, set_align, zero, stat, || unreachable!()),
             ty => matches!(ty, Large),
@@ -467,9 +466,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             debug_assert!(shard.has_free());
             // SAFETY: `shard` has free blocks.
             let (block, is_zeroed) = unsafe { shard.pop_block().unwrap_unchecked() };
-            let ptr = NonNull::from_raw_parts(block.into_raw(), size);
-            post_alloc(ptr, is_zeroed, zero);
-            return Ok(ptr);
+            return Ok(post_alloc(block, size, is_zeroed, zero));
         }
 
         let fresh = if !is_large && let Some(free) = cx.free_shards.pop() {
@@ -499,9 +496,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         debug_assert!(fresh.has_free());
         // SAFETY: `shard` has free blocks.
         let (block, is_zeroed) = unsafe { fresh.pop_block().unwrap_unchecked() };
-        let ptr = NonNull::from_raw_parts(block.into_raw(), size);
-        post_alloc(ptr, is_zeroed, zero);
-        Ok(ptr)
+        Ok(post_alloc(block, size, is_zeroed, zero))
     }
 
     fn pop_aligned<'a>(
@@ -510,7 +505,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         zero: bool,
         stat: &mut Stat,
         fallback: impl FnOnce() -> &'a Self,
-    ) -> Result<NonNull<[u8]>, Error<B>> {
+    ) -> Result<NonNull<()>, Error<B>> {
         if layout.size() <= ObjSizeType::SMALL_MAX
             && let direct_index = direct_index(layout.size())
             // SAFETY: `direct_shards` only contains sizes that <= `SMALL_MAX`.
@@ -522,9 +517,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 stat.direct_count += 1;
                 stat.direct_size += layout.size();
             }
-            let ptr = NonNull::from_raw_parts(block.into_raw(), layout.size());
-            post_alloc(ptr, is_zeroed, zero);
-            return Ok(ptr);
+            return Ok(post_alloc(block, layout.size(), is_zeroed, zero));
         }
         self.pop_aligned_contended(layout, zero, stat, fallback)
     }
@@ -536,7 +529,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         zero: bool,
         stat: &mut Stat,
         fallback: impl FnOnce() -> &'a Self,
-    ) -> Result<NonNull<[u8]>, Error<B>> {
+    ) -> Result<NonNull<()>, Error<B>> {
         if layout.size() <= ObjSizeType::LARGE_MAX
             && let index = obj_size_index(layout.size())
             && let Some(shard) = self.shards[index].list.current()
@@ -547,9 +540,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 stat.normal_count[index] += 1;
                 stat.normal_size += obj_size(index);
             }
-            let ptr = NonNull::from_raw_parts(block.into_raw(), layout.size());
-            post_alloc(ptr, is_zeroed, zero);
-            Ok(ptr)
+            Ok(post_alloc(block, layout.size(), is_zeroed, zero))
         } else if layout.align() <= SHARD_SIZE && layout.size() > ObjSizeType::LARGE_MAX {
             self.pop_huge(layout.size(), false, zero, stat, fallback)
         } else if layout.align() <= ObjSizeType::LARGE_MAX {
@@ -560,7 +551,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             if ptr.addr() != overptr.addr() {
                 track::no_access(overptr.cast(), ptr.addr().get() - overptr.addr().get());
             }
-            Ok(NonNull::from_raw_parts(ptr, layout.size()))
+            Ok(ptr)
         } else {
             Err(Error::Unsupported(layout))
         }
@@ -571,9 +562,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         layout: Layout,
         zero: bool,
         fallback: impl FnOnce() -> &'a Self,
-    ) -> Result<NonNull<[u8]>, Error<B>> {
+    ) -> Result<NonNull<()>, Error<B>> {
         if layout.size() == 0 {
-            return Ok(NonNull::from_raw_parts(layout.dangling().cast(), 0));
+            return Ok(layout.dangling().cast());
         }
         #[cfg(feature = "stat")]
         let mut stat = self.cx()?.stat.borrow_mut();
@@ -593,7 +584,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         size: usize,
         zero: bool,
         fallback: impl FnOnce() -> &'a Self,
-    ) -> Result<NonNull<[u8]>, Error<B>> {
+    ) -> Result<NonNull<()>, Error<B>> {
         #[cfg(feature = "stat")]
         let mut stat = self.cx()?.stat.borrow_mut();
         #[cfg(not(feature = "stat"))]
@@ -611,7 +602,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// Errors are returned when allocation fails, see [`Error`] for more
     /// information.
     #[inline]
-    pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<B>> {
+    pub fn allocate(&self, layout: Layout) -> Result<NonNull<()>, Error<B>> {
         self.allocate_with(layout, || unreachable!("Uninitialized heap"))
     }
 
@@ -625,7 +616,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// Errors are returned when allocation fails, see [`Error`] for more
     /// information.
     #[inline]
-    pub fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<B>> {
+    pub fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<()>, Error<B>> {
         self.allocate_zeroed_with(layout, || unreachable!("Uninitialized heap"))
     }
 
@@ -643,7 +634,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         &'a self,
         layout: Layout,
         fallback: impl FnOnce() -> &'a Self,
-    ) -> Result<NonNull<[u8]>, Error<B>> {
+    ) -> Result<NonNull<()>, Error<B>> {
         self.allocate_inner(layout, false, fallback)
     }
 
@@ -661,7 +652,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         &'a self,
         layout: Layout,
         fallback: impl FnOnce() -> &'a Self,
-    ) -> Result<NonNull<[u8]>, Error<B>> {
+    ) -> Result<NonNull<()>, Error<B>> {
         self.allocate_inner(layout, true, fallback)
     }
 
@@ -935,11 +926,17 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Drop for Heap<'arena, 'cx, B> {
 
 unsafe impl<'arena: 'cx, 'cx, B: BaseAlloc> Allocator for Heap<'arena, 'cx, B> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.allocate(layout).map_err(|_| AllocError)
+        match self.allocate(layout) {
+            Ok(t) => Ok(NonNull::from_raw_parts(t, layout.size())),
+            Err(_) => Err(AllocError),
+        }
     }
 
     fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.allocate_zeroed(layout).map_err(|_| AllocError)
+        match self.allocate_zeroed(layout) {
+            Ok(t) => Ok(NonNull::from_raw_parts(t, layout.size())),
+            Err(_) => Err(AllocError),
+        }
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
