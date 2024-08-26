@@ -197,7 +197,7 @@ pub struct Arenas<B: BaseAlloc> {
     pub(crate) base: B,
     arenas: [AtomicPtr<Arena<B>>; MAX_ARENAS],
     arena_count: AtomicUsize,
-    slab_count: AtomicUsize,
+    // slab_count: AtomicUsize,
     abandoned: AtomicPtr<()>,
 }
 
@@ -212,7 +212,7 @@ impl<B: BaseAlloc> Arenas<B> {
             base,
             arenas: [Self::ARENA_INIT; MAX_ARENAS],
             arena_count: AtomicUsize::new(0),
-            slab_count: AtomicUsize::new(0),
+            // slab_count: AtomicUsize::new(0),
             abandoned: AtomicPtr::new(ptr::null_mut()),
         }
     }
@@ -287,7 +287,7 @@ impl<B: BaseAlloc> Arenas<B> {
         align: usize,
         is_huge: bool,
     ) -> Result<SlabRef, Error<B>> {
-        let count = count.get().max(self.slab_count.load(Relaxed).isqrt());
+        let count = count.get()/* .max(self.slab_count.load(Relaxed).isqrt()) */;
 
         self.collect_abandoned();
         let ret = match self
@@ -301,7 +301,7 @@ impl<B: BaseAlloc> Arenas<B> {
                 arena.allocate(thread_id, count, align, is_huge).unwrap()
             }
         };
-        self.slab_count.fetch_add(count, Relaxed);
+        // self.slab_count.fetch_add(count, Relaxed);
         Ok(ret)
     }
 
@@ -314,8 +314,8 @@ impl<B: BaseAlloc> Arenas<B> {
             debug_assert!(!arena.is_null());
             // SAFETY: `arena` is obtained from the unique `arena_id`, and the arena won't
             // be dropped as long as any allocation from it is alive.
-            let slab_count = unsafe { (*arena).deallocate(slab) };
-            self.slab_count.fetch_sub(slab_count, Relaxed);
+            let _slab_count = unsafe { (*arena).deallocate(slab) };
+            // self.slab_count.fetch_sub(slab_count, Relaxed);
         } else {
             self.push_abandoned(slab)
         }
