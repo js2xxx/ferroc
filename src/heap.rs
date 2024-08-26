@@ -232,23 +232,59 @@ impl<'a, B: BaseAlloc> Heap<'a, B> {
         self.pop_aligned(layout)
     }
 
-    unsafe fn dealloc_inner(&self, ptr: NonNull<u8>, layout: Option<Layout>) {
-        if matches!(layout, Some(l) if l.size() == 0) {
-            return;
-        }
+    pub fn layout_of(&self, ptr: NonNull<u8>) -> Option<Layout> {
         if ptr.is_aligned_to(SLAB_SIZE) {
-            if let Some(l) = layout {
-                debug_assert!(l.align() >= SLAB_SIZE);
-            }
+            return self.cx.arena.layout_of_direct(ptr);
+        }
+        // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
+        let Some(slab) = (unsafe { Slab::from_ptr(ptr) }) else {
+            return Layout::from_size_align(0, ptr.addr().get()).ok();
+        };
+        // SAFETY: `ptr` is in `slab`.
+        let (_, block, obj_size) = unsafe { Slab::shard_infos(slab, ptr.cast()) };
+        let size = obj_size - (block.into_raw().addr().get() - ptr.addr().get());
+        let align = 1 << ptr.addr().get().trailing_zeros();
+        Some(Layout::from_size_align(size, align).unwrap())
+    }
+
+    /// # Safety
+    ///
+    /// - `ptr` must point to an owned, valid memory block of `layout`,
+    ///   previously allocated by a certain instance of `Heap` alive in the
+    ///   scope, created from the same arena.
+    /// - No aliases of `ptr` should exist after the deallocation.
+    #[inline]
+    pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        #[cfg(debug_assertions)]
+        {
+            let tested_layout = self.layout_of(ptr).expect("`ptr` is not allocated from these arenas");
+            debug_assert!(tested_layout.size() >= layout.size());
+            debug_assert!(tested_layout.align() >= layout.align());
+        }
+        // SAFETY: `ptr` is allocated by these structures.
+        unsafe { self.free(ptr) }
+    }
+
+    /// # Safety
+    ///
+    /// - `ptr` must point to an owned, valid memory block, previously allocated
+    ///   by a certain instance of `Heap` alive in the scope, created from the
+    ///   same arena.
+    /// - No aliases of `ptr` should exist after the deallocation.
+    #[inline]
+    pub(crate) unsafe fn free(&self, ptr: NonNull<u8>) {
+        if ptr.is_aligned_to(SLAB_SIZE) {
             unsafe { self.cx.arena.deallocate_direct(ptr) };
             return;
         }
 
         // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
-        let slab = unsafe { Slab::from_ptr(ptr) };
+        let Some(slab) = (unsafe { Slab::from_ptr(ptr) }) else {
+            return;
+        };
         let thread_id = unsafe { ptr::addr_of!((*slab.as_ptr()).thread_id).read() };
         // SAFETY: `ptr` is in `slab`.
-        let (shard, block, obj_size) = unsafe { Slab::shard_infos(slab, ptr.cast(), layout) };
+        let (shard, block, obj_size) = unsafe { Slab::shard_infos(slab, ptr.cast()) };
         if self.cx.thread_id == thread_id {
             // `thread_id` matches; We're deallocating from the same thread.
             let shard = unsafe { shard.as_ref() };
@@ -275,27 +311,6 @@ impl<'a, B: BaseAlloc> Heap<'a, B> {
             // We're deallocating from another thread.
             unsafe { Shard::push_block_mt(shard, block) }
         }
-    }
-
-    /// # Safety
-    ///
-    /// `ptr` must point to an owned, valid memory block of `layout`, previously
-    /// allocated by a certain instance of `Heap` alive in the scope, created
-    /// from the same arena.
-    #[inline]
-    pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        unsafe { self.dealloc_inner(ptr, Some(layout)) }
-    }
-
-    /// # Safety
-    ///
-    /// `ptr` must point to an owned, valid memory block, previously allocated
-    /// by a certain instance of `Heap` alive in the scope, created from the
-    /// same arena.
-    #[cfg(feature = "c")]
-    #[inline]
-    pub(crate) unsafe fn free(&self, ptr: NonNull<u8>) {
-        unsafe { self.dealloc_inner(ptr, None) }
     }
 
     fn collect_huge(&self) {

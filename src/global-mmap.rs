@@ -33,6 +33,10 @@ impl Ferroc {
         HEAP.with(|heap| heap.allocate(layout))
     }
 
+    pub fn layout_of(&self, ptr: NonNull<u8>) -> Option<Layout> {
+        HEAP.with(|heap| heap.layout_of(ptr))
+    }
+
     /// # Safety
     ///
     /// See [`Allocator::deallocate`] for more information.

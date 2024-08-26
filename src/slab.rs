@@ -1,7 +1,6 @@
 mod cell_link;
 
 use core::{
-    alloc::Layout,
     cell::Cell,
     marker::PhantomData,
     mem::{self, MaybeUninit},
@@ -110,10 +109,8 @@ impl<'a> Slab<'a> {
     ///
     /// The pointer must serve as an immutable reference to a direct/indirect
     /// field in a valid slab reference of `'a`.
-    pub(crate) unsafe fn from_ptr<T>(ptr: NonNull<T>) -> NonNull<Self> {
-        // SAFETY: `Slab`s are aligned to its size boundary, so we can obtain it
-        // directly.
-        unsafe { NonNull::new_unchecked(ptr.as_ptr().mask(!(SLAB_SIZE - 1)).cast::<Slab>()) }
+    pub(crate) unsafe fn from_ptr<T>(ptr: NonNull<T>) -> Option<NonNull<Self>> {
+        NonNull::new(ptr.as_ptr().mask(!(SLAB_SIZE - 1)).cast::<Slab>())
     }
 
     /// The shard area is owned by each corresponding shard in a similar way to
@@ -153,7 +150,6 @@ impl<'a> Slab<'a> {
     pub(crate) unsafe fn shard_infos(
         this: NonNull<Self>,
         ptr: NonNull<()>,
-        _layout: Option<Layout>,
     ) -> (NonNull<Shard<'a>>, BlockRef<'a>, usize) {
         // SAFETY: The same as `shard_meta`.
         let (shard, index) = unsafe { Self::shard_meta(this, ptr) };
@@ -375,7 +371,7 @@ impl<'a> Shard<'a> {
 impl<'a> Shard<'a> {
     pub(crate) fn slab(&self) -> (&'a Slab<'a>, usize) {
         // SAFETY: A shard cannot be manually used on the stack.
-        let slab = unsafe { Slab::from_ptr(self.into()) };
+        let slab = unsafe { Slab::from_ptr(self.into()) }.unwrap();
         let slab = unsafe { slab.as_ref() };
         // SAFETY: `self` must reside in the `shards` array in its `Slab`.
         let index = unsafe { (self as *const Self).sub_ptr(slab.shards.as_ptr()) };

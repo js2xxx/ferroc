@@ -335,6 +335,12 @@ impl<B: BaseAlloc> Arenas<B> {
         ))
     }
 
+    pub fn layout_of_direct(&self, ptr: NonNull<u8>) -> Option<Layout> {
+        self.arenas(true)
+            .find(|(_, arena)| arena.chunk.pointer().cast() == ptr)
+            .map(|(_, arena)| arena.chunk.layout())
+    }
+
     /// # Panics
     ///
     /// Panics if `ptr` is not allocated from this structure.
