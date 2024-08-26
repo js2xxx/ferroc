@@ -22,6 +22,7 @@ jobs:
         run: |
           cargo install cargo-fuzz
           cargo install cargo-binutils
+          cargo install rustfilt
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -43,7 +44,7 @@ jobs:
           sleep 60
           k(){ if c=$(pgrep -P $1);then for p in $c;do k $p;done;fi;kill $1; }; k $PID
           cargo fuzz coverage stress --release
-          cargo cov -- export ./fuzz/coverage/stress/coverage.profdata \
+          cargo cov -- export -instr-profile=./fuzz/coverage/stress/coverage.profdata \
             -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/stress \
             -sources ./src | rustfilt > target/coverage.json
 
