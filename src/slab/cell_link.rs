@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-pub trait CellLinked<'a>: PartialEq {
+pub trait CellLinked<'a> {
     fn link(&'a self) -> &'a CellLink<'a, Self>;
 }
 

@@ -431,7 +431,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
             // 3. Try to clear abandoned huge shards and allocate/reclaim a slab.
             if !has_unfulled {
-                self.collect_huge(stat);
+                // SAFETY: The current function needs the heap to be initialized.
+                unsafe { self.collect_huge(stat) };
                 let free = cx.alloc_slab(NonZeroUsize::MIN, SLAB_SIZE, is_large, stat)?;
                 add_free(free, stat)?;
             }
@@ -487,8 +488,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
     }
 
-    #[doc(hidden)]
-    pub unsafe fn allocate_inner(
+    unsafe fn allocate_inner(
         &self,
         layout: Layout,
         zero: bool,
@@ -566,36 +566,51 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// [`allocate`](Heap::allocate), but is the most fit layout of it, and can
     /// be passed to [`deallocate`](Heap::deallocate).
     ///
+    /// # Errors
+    ///
+    /// [`Error::Uninit`] is returned if the heap needs to be initialized first
+    /// before retrieving the layout of this allocation.
+    ///
     /// # Safety
     ///
     /// - `ptr` must point to an owned, valid memory block of `layout`,
     ///   previously allocated by a certain instance of `Heap` alive in the
     ///   scope, created from the same arena.
     /// - The allocation size must not be 0.
-    pub unsafe fn layout_of(&self, ptr: NonNull<u8>) -> Option<Layout> {
-        // SAFETY: `cx` must be initialized before any effective allocation.
-        let cx = unsafe { self.cx.unwrap_unchecked() };
-        #[cfg(debug_assertions)]
-        if !cx.arena.check_ptr(ptr) {
-            return None;
-        }
+    pub unsafe fn layout_of(&self, ptr: NonNull<u8>) -> Result<Layout, Error<B>> {
         if ptr.is_aligned_to(SLAB_SIZE) {
-            return cx.arena.layout_of_direct(ptr);
+            let Some(layout) = self.cx()?.arena.layout_of_direct(ptr) else {
+                unreachable!("{ptr:p} is not allocated from these arenas")
+            };
+            return Ok(layout);
+        }
+        #[cfg(debug_assertions)]
+        if let Some(cx) = self.cx
+            && !cx.arena.check_ptr(ptr)
+        {
+            unreachable!("{ptr:p} is not allocated from these arenas");
         }
         // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
-        let Some(slab) = (unsafe { Slab::from_ptr(ptr) }) else {
-            return Layout::from_size_align(0, ptr.addr().get()).ok();
-        };
+        let slab = unsafe { Slab::from_ptr(ptr).unwrap_unchecked() };
         // SAFETY: `ptr` is in `slab`.
         let (shard, block) = unsafe { Slab::shard_infos(slab, ptr.cast()) };
         let obj_size = unsafe { Shard::obj_size_raw(shard) };
+
         let size = obj_size - (ptr.addr().get() - block.into_raw().addr().get());
         let align = 1 << ptr.addr().get().trailing_zeros();
-        Some(Layout::from_size_align(size, align).unwrap())
+        Ok(Layout::from_size_align(size, align).unwrap())
     }
 
     /// Deallocates an allocation previously allocated by an instance of heap
     /// referring to the same collection of arenas.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Uninit`] is returned if the heap needs to be initialized first
+    /// before deallocating this pointer.
+    ///
+    /// The corresponding implementation in `core::alloc::Allocator` will
+    /// silently leak the allocation instead in this case.
     ///
     /// # Safety
     ///
@@ -604,15 +619,13 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     ///   scope, created from the same arena.
     /// - No aliases of `ptr` should exist after the deallocation.
     #[inline]
-    pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+    pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) -> Result<(), Error<B>> {
         if layout.size() == 0 {
-            return;
+            return Ok(());
         }
         #[cfg(debug_assertions)]
         {
-            let tested_layout = self
-                .layout_of(ptr)
-                .expect("`ptr` is not allocated from these arenas");
+            let tested_layout = self.layout_of(ptr)?;
             debug_assert!(tested_layout.size() >= layout.size());
             debug_assert!(tested_layout.align() >= layout.align());
         }
@@ -620,6 +633,11 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         unsafe { self.free(ptr) }
     }
 
+    /// # Errors
+    ///
+    /// [`Error::Uninit`] is returned if the heap needs to be initialized first
+    /// before deallocating this pointer.
+    ///
     /// # Safety
     ///
     /// - `ptr` must point to an owned, valid memory block, previously allocated
@@ -628,28 +646,27 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// - No aliases of `ptr` should exist after the deallocation.
     /// - The allocation size must not be 0.
     #[inline]
-    pub(crate) unsafe fn free(&self, ptr: NonNull<u8>) {
-        // SAFETY: `cx` must be initialized before any effective allocation.
-        let cx = unsafe { self.cx.unwrap_unchecked() };
+    pub(crate) unsafe fn free(&self, ptr: NonNull<u8>) -> Result<(), Error<B>> {
         if ptr.is_aligned_to(SLAB_SIZE) {
-            unsafe { cx.arena.deallocate_direct(ptr) };
-            return;
+            unsafe { self.cx()?.arena.deallocate_direct(ptr) };
+            return Ok(());
         }
         #[cfg(debug_assertions)]
-        if !cx.arena.check_ptr(ptr) {
-            // panic!("{ptr:p} is not allocated from these arenas");
-            return;
+        if let Some(cx) = self.cx
+            && !cx.arena.check_ptr(ptr)
+        {
+            unreachable!("{ptr:p} is not allocated from these arenas");
         }
         // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
-        let Some(slab) = (unsafe { Slab::from_ptr(ptr) }) else {
-            return;
-        };
+        let slab = unsafe { Slab::from_ptr(ptr).unwrap_unchecked() };
         track::deallocate(ptr, 0);
 
         let thread_id = unsafe { ptr::addr_of!((*slab.as_ptr()).thread_id).read() };
         // SAFETY: `ptr` is in `slab`.
         let (shard, block) = unsafe { Slab::shard_infos(slab, ptr.cast()) };
-        if cx.thread_id == thread_id {
+        if let Some(cx) = self.cx
+            && cx.thread_id == thread_id
+        {
             // `thread_id` matches; We're deallocating from the same thread.
             #[cfg(feature = "stat")]
             let mut stat = cx.stat.borrow_mut();
@@ -699,14 +716,21 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             // We're deallocating from another thread.
             unsafe { Shard::push_block_mt(shard, block) }
         }
+        Ok(())
     }
 
-    fn collect_huge(&self, stat: &mut Stat) {
+    /// # Safety
+    ///
+    /// The heap must be initialized.
+    unsafe fn collect_huge(&self, stat: &mut Stat) {
         let huge = self.huge_shards.drain(|shard| {
             shard.collect(false);
             shard.is_unused()
         });
-        huge.for_each(|shard| self.cx.unwrap().finalize_shard(shard, stat));
+        huge.for_each(|shard| {
+            let cx = unsafe { self.cx.unwrap_unchecked() };
+            cx.finalize_shard(shard, stat)
+        });
     }
 
     /// Clean up some garbage data immediately.
@@ -728,7 +752,10 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         #[cfg(not(feature = "stat"))]
         let mut stat = ();
 
-        self.collect_huge(&mut stat);
+        if self.is_init() {
+            // SAFETY: `self` is initialized.
+            unsafe { self.collect_huge(&mut stat) };
+        }
     }
 }
 
@@ -761,7 +788,7 @@ unsafe impl<'arena: 'cx, 'cx, B: BaseAlloc> Allocator for Heap<'arena, 'cx, B> {
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        self.deallocate(ptr, layout)
+        let _ = self.deallocate(ptr, layout);
     }
 }
 

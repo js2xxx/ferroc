@@ -75,7 +75,7 @@
 //! can use the intermediate structures manually while disabling unnecessary
 //! features:
 //!
-//! ```rust,ignore
+//! ```rust
 //! #![feature(allocator_api)]
 //! use ferroc::{
 //!     arena::Arenas,
@@ -95,7 +95,7 @@
 //! // Manually allocate memory.
 //! let layout = std::alloc::Layout::new::<u8>();
 //! let ptr = heap.allocate(layout).unwrap();
-//! unsafe { heap.deallocate(ptr, layout) };
+//! unsafe { heap.deallocate(ptr.cast(), layout) }.unwrap();
 //!
 //! // Immediately run some delayed clean-up operations.
 //! heap.collect(/* force */false);
