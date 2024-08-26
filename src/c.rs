@@ -92,13 +92,18 @@ pub unsafe extern "C" fn realloc(ptr: *mut c_void, new_size: usize) -> *mut c_vo
     let Some(layout) = Ferroc.layout_of(ptr.cast()) else {
         return ptr::null_mut();
     };
-    if (layout.size() / 2..layout.size()).contains(&new_size) {
+    let old_size = layout.size();
+    if (old_size / 2..old_size).contains(&new_size) {
         return ptr.as_ptr();
     }
 
     let new = malloc(new_size);
     if !new.is_null() {
-        new.copy_from_nonoverlapping(ptr.as_ptr(), layout.size());
+        let copied = old_size.min(new_size);
+        new.copy_from_nonoverlapping(ptr.as_ptr(), copied);
+        if let Some(zeroed) = new_size.checked_sub(old_size) {
+            new.add(copied).write_bytes(0, zeroed);
+        }
         free(ptr.as_ptr().cast());
     }
     new
