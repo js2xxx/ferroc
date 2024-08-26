@@ -7,6 +7,12 @@ use super::{Chunk, OsAlloc};
 #[derive(Debug, Clone, Copy, Default, Hash)]
 pub struct MmapAlloc;
 
+impl MmapAlloc {
+    pub const fn new() -> Self {
+        MmapAlloc
+    }
+}
+
 unsafe impl OsAlloc for MmapAlloc {
     const IS_ZEROED: bool = true;
 

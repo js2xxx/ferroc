@@ -17,8 +17,8 @@ use crate::{
 
 const BYTE_WIDTH: usize = u8::BITS as usize;
 
-pub(crate) const SLAB_SHIFT: usize = 2 + 10 + 10;
-pub(crate) const SLAB_SIZE: usize = 1 << SLAB_SHIFT;
+pub const SLAB_SHIFT: usize = 2 + 10 + 10;
+pub const SLAB_SIZE: usize = 1 << SLAB_SHIFT;
 
 pub const fn slab_layout(n: usize) -> Layout {
     match Layout::from_size_align(n << SLAB_SHIFT, SLAB_SIZE) {
@@ -198,6 +198,7 @@ pub struct Arenas<Os: OsAlloc> {
     arenas: [AtomicPtr<Arena<Os>>; MAX_ARENAS],
     arena_count: AtomicUsize,
     slab_count: AtomicUsize,
+    abandoned: AtomicPtr<()>,
 }
 
 impl<Os: OsAlloc> Arenas<Os> {
@@ -212,6 +213,7 @@ impl<Os: OsAlloc> Arenas<Os> {
             arenas: [Self::ARENA_INIT; MAX_ARENAS],
             arena_count: AtomicUsize::new(0),
             slab_count: AtomicUsize::new(0),
+            abandoned: AtomicPtr::new(ptr::null_mut()),
         }
     }
 
@@ -235,6 +237,31 @@ impl<Os: OsAlloc> Arenas<Os> {
         }
     }
 
+    fn push_abandoned(&self, slab: SlabRef) {
+        assert!(slab.is_abandoned());
+        let mut next = self.abandoned.load(Relaxed);
+        loop {
+            slab.abandoned_next.store(next, Relaxed);
+            match self
+                .abandoned
+                .compare_exchange(next, slab.as_ptr().as_ptr(), AcqRel, Acquire)
+            {
+                Ok(_) => break,
+                Err(e) => next = e,
+            }
+        }
+    }
+
+    pub(crate) fn collect_abandoned(&self) {
+        let mut next = self.abandoned.swap(ptr::null_mut(), Relaxed);
+        // SAFETY: `pointer` is owned: abandoned slabs comes from a dead thread context.
+        while let Some(slab) = NonNull::new(next).map(|p| unsafe { SlabRef::from_ptr(p) }) {
+            next = slab.abandoned_next.load(Relaxed);
+            slab.collect_abandoned();
+            unsafe { self.deallocate(slab) };
+        }
+    }
+
     fn arenas(&self, is_exclusive: bool) -> impl Iterator<Item = (usize, &Arena<Os>)> {
         let iter = self.arenas[..self.arena_count.load(Acquire)].iter();
         // SAFETY: We check the nullity of the pointers.
@@ -243,7 +270,17 @@ impl<Os: OsAlloc> Arenas<Os> {
             .filter(move |(_, arena)| arena.is_exclusive == is_exclusive)
     }
 
-    pub fn allocate(
+    pub fn os_alloc(&self) -> &Os {
+        &self.os
+    }
+
+    pub fn manage(&self, chunk: Chunk<Os>) -> Result<(), Error<Os>> {
+        let arena = Arena::new_chunk(self.os.clone(), chunk)?;
+        self.push_arena(arena)?;
+        Ok(())
+    }
+
+    pub(crate) fn allocate(
         &self,
         thread_id: u64,
         count: NonZeroUsize,
@@ -251,6 +288,8 @@ impl<Os: OsAlloc> Arenas<Os> {
         is_huge: bool,
     ) -> Result<SlabRef, Error<Os>> {
         let count = count.get().max(self.slab_count.load(Relaxed).isqrt());
+
+        self.collect_abandoned();
         let ret = match self
             .arenas(false)
             .find_map(|(_, arena)| arena.allocate(thread_id, count, align, is_huge))
@@ -266,28 +305,20 @@ impl<Os: OsAlloc> Arenas<Os> {
         Ok(ret)
     }
 
-    pub fn os_alloc(&self) -> &Os {
-        &self.os
-    }
-
-    pub fn manage(&self, chunk: Chunk<Os>) -> Result<(), Error<Os>> {
-        let arena = Arena::new_chunk(self.os.clone(), chunk)?;
-        self.push_arena(arena)?;
-        Ok(())
-    }
-
     /// # Safety
     ///
-    /// - `slab` must be previously allocated from this structure;
-    /// - No more references to the `slab` or its shards exist after calling
-    ///   this function.
-    pub unsafe fn deallocate(&self, slab: SlabRef) {
-        let arena = self.arenas[slab.arena_id - 1].load(Acquire);
-        debug_assert!(!arena.is_null());
-        // SAFETY: `arena` is obtained from the unique `arena_id`, and the arena won't
-        // be dropped as long as any allocation from it is alive.
-        let slab_count = unsafe { (*arena).deallocate(slab) };
-        self.slab_count.fetch_sub(slab_count, Relaxed);
+    /// `slab` must be previously allocated from this structure;
+    pub(crate) unsafe fn deallocate(&self, slab: SlabRef) {
+        if !slab.is_abandoned() {
+            let arena = self.arenas[slab.arena_id - 1].load(Acquire);
+            debug_assert!(!arena.is_null());
+            // SAFETY: `arena` is obtained from the unique `arena_id`, and the arena won't
+            // be dropped as long as any allocation from it is alive.
+            let slab_count = unsafe { (*arena).deallocate(slab) };
+            self.slab_count.fetch_sub(slab_count, Relaxed);
+        } else {
+            self.push_abandoned(slab)
+        }
     }
 
     pub fn allocate_direct(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<Os>> {
@@ -310,7 +341,7 @@ impl<Os: OsAlloc> Arenas<Os> {
     ///
     /// # Safety
     ///
-    /// - No more aliases to the `ptr` exist after calling this function.
+    /// No more aliases to the `ptr` should exist after calling this function.
     pub unsafe fn deallocate_direct(&self, ptr: NonNull<u8>, _layout: Layout) {
         if let Some((index, _)) = self
             .arenas(true)

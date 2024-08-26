@@ -8,7 +8,7 @@ use core::{
 use crate::{
     arena::{Arenas, Error, SHARD_SIZE, SLAB_SIZE},
     os::OsAlloc,
-    slab::{BlockRef, Shard, ShardList, Slab, SlabRef},
+    slab::{BlockRef, Shard, ShardList, Slab},
 };
 
 pub const OBJ_SIZES: &[usize] = &[
@@ -27,9 +27,9 @@ pub const OBJ_SIZES: &[usize] = &[
     65536, // SHARD_SIZE_MAX
 ];
 
-pub const OBJ_SIZE_COUNT: usize = OBJ_SIZES.len();
+pub(crate) const OBJ_SIZE_COUNT: usize = OBJ_SIZES.len();
 
-pub fn obj_size_index(size: usize) -> Option<usize> {
+pub(crate) fn obj_size_index(size: usize) -> Option<usize> {
     Some(match OBJ_SIZES.binary_search(&size) {
         Ok(index) => index,
         Err(index) => match OBJ_SIZES.get(index) {
@@ -43,17 +43,15 @@ pub struct Context<'a, Os: OsAlloc> {
     thread_id: u64,
     arena: &'a Arenas<Os>,
     free_shards: ShardList<'a>,
-    abandoned_shards: ShardList<'a>,
 }
 
 impl<'a, Os: OsAlloc> Context<'a, Os> {
     pub fn new(arena: &'a Arenas<Os>) -> Self {
-        static ID: AtomicU64 = AtomicU64::new(0);
+        static ID: AtomicU64 = AtomicU64::new(1);
         Context {
             thread_id: ID.fetch_add(1, Relaxed),
             arena,
             free_shards: Default::default(),
-            abandoned_shards: Default::default(),
         }
     }
 
@@ -67,30 +65,17 @@ impl<'a, Os: OsAlloc> Context<'a, Os> {
         Ok(slab.into_shard())
     }
 
-    /// # Safety
-    ///
-    /// No more references to the `slab` or its shards should exist after
-    /// calling this function.
-    unsafe fn dealloc_slab(&self, slab: SlabRef<'a>) {
-        unsafe { self.arena.deallocate(slab) }
-    }
-
-    /// # Safety
-    ///
-    /// No more references to the `slab` or its shards should exist after
-    /// calling this function.
-    unsafe fn finalize_shard(&self, shard: &'a Shard<'a>) {
+    fn finalize_shard(&self, shard: &'a Shard<'a>) {
         match shard.fini() {
-            Ok(fini) => self.free_shards.push(fini),
-            // `slab` is unused, we can deallocate it.
-            Err(slab) => unsafe { self.dealloc_slab(slab) },
+            Ok(Some(fini)) => self.free_shards.push(fini),
+            Ok(None) => {} // `slab` has abandoned shard(s), so we cannot reuse it.
+            // `slab` is unused/abandoned, we can deallocate it.
+            Err(slab) => {
+                self.free_shards.drain(|s| ptr::eq(s.slab().0, &*slab));
+                // SAFETY: All slabs are allocated from `self.arena`.
+                unsafe { self.arena.deallocate(slab) }
+            }
         }
-    }
-
-    pub fn collect(&self, force: bool) {
-        self.abandoned_shards
-            .iter()
-            .for_each(|shard| shard.collect(force));
     }
 }
 
@@ -169,23 +154,14 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
             return Ok(block);
         }
 
-        if let Some(free) = (self.cx.free_shards.pop()) // 1. Try to pop from the free shards;
-            .or_else(|| {
-                // 2. Try to collect abandoned shards (only has `free` & `thread_free` blocks);
-                let shard = self.cx.abandoned_shards.iter().find(|shard| {
-                    shard.collect(false);
-                    shard.is_unused()
-                })?;
-                self.cx.abandoned_shards.remove(shard);
-                Some(shard)
-            })
-        {
+        if let Some(free) = self.cx.free_shards.pop() {
+            // 1. Try to pop from the free shards;
             if let Some(next) = free.init(OBJ_SIZES[index]) {
                 self.cx.free_shards.push(next);
             }
             list.push(free);
         } else {
-            // 3. Try to collect potentially unfull shards.
+            // 2. Try to collect potentially unfull shards.
             let unfulled = self.full_shards.drain(|shard| {
                 shard.collect(false);
                 !shard.is_full()
@@ -197,7 +173,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
                 has_unfulled |= i == index;
             });
 
-            // 4. Try to clear abandoned huge shards and allocate a new slab.
+            // 3. Try to clear abandoned huge shards and allocate/reclaim a slab.
             if !has_unfulled {
                 self.clear_abandoned_huge();
                 let free = self.cx.alloc_slab(NonZeroUsize::MIN, SLAB_SIZE, false)?;
@@ -269,15 +245,13 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
 
                 if is_unused && self.shards[index].len() > 1 {
                     self.shards[index].remove(shard);
-                    // `shard` is unused after this calling.
-                    unsafe { self.cx.finalize_shard(shard) }
+                    self.cx.finalize_shard(shard);
                 }
             } else {
                 debug_assert!(is_unused);
 
                 self.huge_shards.remove(shard);
-                // `shard` is unused after this calling.
-                unsafe { self.cx.finalize_shard(shard) }
+                self.cx.finalize_shard(shard);
             }
         } else {
             // We're deallocating from another thread.
@@ -285,23 +259,15 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
         }
     }
 
-    fn clear_abandoned_huge(&self) -> bool {
+    fn clear_abandoned_huge(&self) {
         let huge = self.huge_shards.drain(|shard| {
             shard.collect(false);
             shard.is_unused()
         });
-        let mut has_unused = false;
-        huge.for_each(|shard| {
-            // `shard` is unused after this calling.
-            unsafe { self.cx.finalize_shard(shard) };
-            has_unused = true
-        });
-        has_unused
+        huge.for_each(|shard| self.cx.finalize_shard(shard));
     }
 
     pub fn collect(&self, force: bool) {
-        self.cx.collect(force);
-
         let shards = self.shards.iter().flatten();
         shards.for_each(|shard| shard.collect(force));
 
@@ -311,17 +277,11 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
 
 impl<'a, Os: OsAlloc> Drop for Heap<'a, Os> {
     fn drop(&mut self) {
-        let iter = self.shards.iter().flat_map(|l| l.drain(|_| true));
-        iter.for_each(|shard| {
+        let iter = (self.shards.iter()).chain([&self.huge_shards, &self.full_shards]);
+        iter.flat_map(|l| l.drain(|_| true)).for_each(|shard| {
             shard.collect(false);
-            if shard.is_unused() {
-                // `shard` is unused after this calling.
-                unsafe { self.cx.finalize_shard(shard) }
-            } else {
-                self.cx.abandoned_shards.push(shard)
-            }
+            self.cx.finalize_shard(shard);
         });
-        self.clear_abandoned_huge();
     }
 }
 

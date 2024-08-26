@@ -1,4 +1,4 @@
-use core::{cell::Cell, ops::ControlFlow};
+use core::cell::Cell;
 
 pub trait CellLinked: Sized + Copy {
     fn link(&self) -> &CellLink<Self>;
@@ -125,27 +125,6 @@ impl<T: CellLinked> CellList<T> {
             pred,
         }
     }
-
-    /// # Arguments
-    ///
-    /// - `pred`: `true` indicates the current element should be retained.
-    pub fn retain<F, R>(&self, mut pred: F) -> Option<R>
-    where
-        F: FnMut(T) -> (bool, ControlFlow<R, ()>),
-    {
-        let mut cur = self.head.get();
-        while let Some(node) = cur {
-            let (remove, control_flow) = pred(node);
-            match control_flow {
-                ControlFlow::Continue(()) => cur = node.link().next.get(),
-                ControlFlow::Break(r) => return Some(r),
-            }
-            if remove {
-                self.remove(node);
-            }
-        }
-        None
-    }
 }
 
 impl<T: CellLinked> Default for CellList<T> {
@@ -198,7 +177,7 @@ impl<'a, T: CellLinked, F: FnMut(T) -> bool> Iterator for Drain<'a, T, F> {
 
 impl<'a, T: CellLinked, F: FnMut(T) -> bool> Drop for Drain<'a, T, F> {
     fn drop(&mut self) {
-        while self.next().is_some() {}
+        self.for_each(drop)
     }
 }
 

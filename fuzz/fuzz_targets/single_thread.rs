@@ -3,11 +3,7 @@
 
 use std::alloc::Layout;
 
-use ferroc::{
-    arena::Arenas,
-    heap::{Context, Heap},
-    MmapAlloc,
-};
+use ferroc::{Arenas, Context, Heap};
 use libfuzzer_sys::{arbitrary::Arbitrary, fuzz_target};
 
 #[derive(Debug, Arbitrary)]
@@ -18,7 +14,7 @@ enum Action {
 }
 
 fuzz_target!(|actions: Vec<Action>| {
-    let arena = Arenas::new(MmapAlloc);
+    let arena = Arenas::new(Default::default());
     let cx = Context::new(&arena);
     let heap = Heap::new(&cx);
 
