@@ -2,6 +2,9 @@
 //!
 //! See [`Heap`] and [`Context`] for more information.
 
+#[cfg(feature = "global")]
+mod thread_local;
+
 #[cfg(feature = "stat")]
 use core::cell::RefCell;
 use core::{
@@ -13,6 +16,8 @@ use core::{
     sync::atomic::{AtomicU64, Ordering::*},
 };
 
+#[cfg(feature = "global")]
+pub use self::thread_local::ThreadLocal;
 use crate::{
     arena::{Arenas, Error, SHARD_SIZE, SLAB_SIZE},
     base::BaseAlloc,
@@ -115,8 +120,16 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
     /// evaluation.
     pub fn new(arena: &'arena Arenas<B>) -> Self {
         static ID: AtomicU64 = AtomicU64::new(1);
+        // SAFETY: ID is unique.
+        unsafe { Self::new_with_id(arena, ID.fetch_add(1, Relaxed)) }
+    }
+
+    /// # Safety
+    ///
+    /// `thread_id` must be unique with each live thread.
+    unsafe fn new_with_id(arena: &'arena Arenas<B>, thread_id: u64) -> Self {
         Context {
-            thread_id: ID.fetch_add(1, Relaxed),
+            thread_id,
             arena,
             free_shards: Default::default(),
             heap_count: Cell::new(0),
@@ -654,6 +667,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         track::deallocate(ptr, 0);
 
         let thread_id = unsafe { ptr::addr_of!((*slab.as_ptr()).thread_id).read() };
+        debug_assert_ne!(thread_id, 0);
         // SAFETY: `ptr` is in `slab`.
         let (shard, block) = unsafe { Slab::shard_infos(slab, ptr.cast()) };
         if let Some(cx) = self.cx

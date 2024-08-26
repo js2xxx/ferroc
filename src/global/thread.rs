@@ -8,37 +8,30 @@ pub use libc::{pthread_key_create, pthread_key_delete, pthread_setspecific};
 #[allow_internal_unstable(thread_local)]
 macro_rules! thread_statics {
     () => {
-        use core::mem::{ManuallyDrop, MaybeUninit};
+        use core::{cell::Cell, num::NonZeroU64, pin::Pin, ptr};
 
-        use super::{Context, Heap, ARENAS};
-
-        #[thread_local]
-        static mut CX: MaybeUninit<Context> = MaybeUninit::uninit();
+        use super::{Error, Heap, THREAD_LOCALS};
 
         #[thread_local]
-        static mut HEAP: ManuallyDrop<Heap> = ManuallyDrop::new(Heap::new_uninit());
+        static HEAP: Cell<Pin<&Heap>> = Cell::new(THREAD_LOCALS.uninit_heap());
 
-        #[inline]
-        pub fn with_init<T>(f: impl FnOnce(&Heap) -> T) -> T {
-            debug_assert!(unsafe { !HEAP.is_init() });
-            unsafe {
-                init();
-                let cx = CX.write(Context::new(&ARENAS));
-                HEAP.init(cx);
-            }
-            f(unsafe { &*core::ptr::addr_of!(HEAP) })
+        pub fn with<T: core::fmt::Debug>(f: impl FnOnce(&Heap) -> T) -> T {
+            f(&HEAP.get())
         }
 
-        #[inline]
-        pub fn with<T>(f: impl FnOnce(&Heap) -> T) -> Option<T> {
-            if unsafe { HEAP.is_init() } {
-                return Some(f(unsafe { &*core::ptr::addr_of!(HEAP) }));
+        pub fn with_lazy<T: core::fmt::Debug>(
+            mut f: impl FnMut(&Heap) -> Result<T, Error>,
+        ) -> Result<T, Error> {
+            match f(&HEAP.get()) {
+                Ok(t) => Ok(t),
+                Err(Error::Uninit) => {
+                    let (heap, id) = Pin::static_ref(&THREAD_LOCALS).assign();
+                    unsafe { init(id) };
+                    HEAP.set(heap);
+                    f(&heap)
+                }
+                Err(err) => Err(err),
             }
-            None
-        }
-
-        pub fn with_uninit<T>(f: impl FnOnce(&Heap) -> T) -> T {
-            f(unsafe { &*core::ptr::addr_of!(HEAP) })
         }
     };
 }
@@ -48,15 +41,16 @@ macro_rules! thread_statics {
 #[doc(hidden)]
 macro_rules! thread_init_pthread {
     () => {
-        unsafe fn init() {
-            unsafe extern "C" fn fini(_: *mut core::ffi::c_void) {
-                if HEAP.is_init() {
-                    ManuallyDrop::drop(&mut *core::ptr::addr_of_mut!(HEAP));
-                    CX.assume_init_drop();
+        unsafe fn init(id: NonZeroU64) {
+            unsafe extern "C" fn fini(id: *mut core::ffi::c_void) {
+                if let Some(id) = NonZeroU64::new(id.addr().try_into().unwrap()) {
+                    HEAP.set(THREAD_LOCALS.uninit_heap());
+                    Pin::static_ref(&THREAD_LOCALS).put(id);
                 }
             }
 
-            register_thread_dtor(core::ptr::NonNull::dangling().as_ptr(), fini);
+            let data = ptr::without_provenance_mut(id.get().try_into().unwrap());
+            register_thread_dtor(data, fini);
         }
 
         unsafe fn register_thread_dtor(
@@ -103,7 +97,7 @@ macro_rules! thread_init_pthread {
 #[doc(hidden)]
 macro_rules! thread_init {
     () => {
-        unsafe fn init() {}
+        unsafe fn init(_id: NonZeroU64) {}
     };
 }
 

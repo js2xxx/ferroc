@@ -234,7 +234,7 @@ const MAX_ARENAS: usize = 112;
 ///
 /// See [the crate-level documentation](crate) for its usage.
 pub struct Arenas<B: BaseAlloc> {
-    pub(crate) base: B,
+    base: B,
     arenas: [AtomicPtr<Arena<B>>; MAX_ARENAS],
     arena_count: AtomicUsize,
     // slab_count: AtomicUsize,
