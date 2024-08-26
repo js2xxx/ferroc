@@ -27,6 +27,7 @@ macro_rules! thread_statics {
                 Ok(t) => Ok(t),
                 Err(Error::Uninit) => {
                     let (heap, id) = Pin::static_ref(&THREAD_LOCALS).assign();
+                    // SAFETY: `init` is called only once for every thread-local heap.
                     unsafe { init(id) };
                     HEAP.set(heap);
                     f(&heap)
@@ -42,6 +43,10 @@ macro_rules! thread_statics {
 #[doc(hidden)]
 macro_rules! thread_init_pthread {
     () => {
+        /// # Safety
+        ///
+        /// This function must be called only once for every initialized thread-local
+        /// heap.
         unsafe fn init(id: NonZeroU64) {
             unsafe extern "C" fn fini(id: *mut core::ffi::c_void) {
                 if let Some(id) = NonZeroU64::new(id.addr().try_into().unwrap()) {
