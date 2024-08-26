@@ -61,6 +61,13 @@ mod test {
     }
 
     #[test]
+    fn large() {
+        let mut vec = vec![0u8; 5 * SHARD_SIZE];
+        vec[2 * SHARD_SIZE] = 123;
+        drop(vec);
+    }
+
+    #[test]
     fn huge() {
         let mut vec = vec![0u8; SLAB_SIZE + 5 * SHARD_SIZE];
         vec[SLAB_SIZE / 2] = 123;
