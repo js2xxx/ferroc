@@ -1,6 +1,6 @@
 use core::{
     alloc::{Allocator, Layout},
-    ffi::{c_int, c_void},
+    ffi::{c_char, c_int, c_void},
     ptr::{self, NonNull},
 };
 
@@ -39,6 +39,14 @@ extern "C" fn fe_aligned_alloc(align: usize, size: usize) -> *mut c_void {
     Ferroc
         .allocate(layout)
         .map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
+}
+
+#[no_mangle]
+unsafe extern "C" fn fe_malloc_usable_size(ptr: *mut c_void) -> usize {
+    match NonNull::new(ptr) {
+        Some(ptr) => Ferroc.layout_of(ptr.cast()).map_or(0, |l| l.size()),
+        None => 0,
+    }
 }
 
 #[no_mangle]
@@ -83,4 +91,40 @@ unsafe extern "C" fn fe_realloc(ptr: *mut c_void, new_size: usize) -> *mut c_voi
         fe_free(ptr.as_ptr().cast());
     }
     new
+}
+
+#[no_mangle]
+unsafe extern "C" fn fe_strdup(s: *const c_char) -> *mut c_char {
+    let len = libc::strlen(s);
+    let ptr = fe_malloc(len + 1).cast::<c_char>();
+    if !ptr.is_null() {
+        ptr.copy_from_nonoverlapping(s, len);
+        ptr.add(len).write(0);
+    }
+    ptr
+}
+
+#[no_mangle]
+unsafe extern "C" fn fe_strndup(s: *const c_char, n: usize) -> *mut c_char {
+    let len = libc::strnlen(s, n);
+    let ptr = fe_malloc(len + 1).cast::<c_char>();
+    if !ptr.is_null() {
+        ptr.copy_from_nonoverlapping(s, len);
+        ptr.add(len).write(0);
+    }
+    ptr
+}
+
+#[no_mangle]
+unsafe extern "C" fn fe_realpath(name: *const c_char, resolved: *mut c_char) -> *mut c_char {
+    if !resolved.is_null() {
+        return libc::realpath(name, resolved);
+    }
+    let r = libc::realpath(name, ptr::null_mut());
+    if r.is_null() {
+        return ptr::null_mut();
+    }
+    let dupped = fe_strdup(r);
+    libc::free(r as *mut c_void);
+    dupped
 }

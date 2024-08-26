@@ -232,7 +232,12 @@ impl<'a, B: BaseAlloc> Heap<'a, B> {
         self.pop_aligned(layout)
     }
 
-    pub fn layout_of(&self, ptr: NonNull<u8>) -> Option<Layout> {
+    /// # Safety
+    ///
+    /// `ptr` must point to an owned, valid memory block of `layout`, previously
+    /// allocated by a certain instance of `Heap` alive in the scope, created
+    /// from the same arena.
+    pub unsafe fn layout_of(&self, ptr: NonNull<u8>) -> Option<Layout> {
         if ptr.is_aligned_to(SLAB_SIZE) {
             return self.cx.arena.layout_of_direct(ptr);
         }
@@ -257,7 +262,9 @@ impl<'a, B: BaseAlloc> Heap<'a, B> {
     pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         #[cfg(debug_assertions)]
         {
-            let tested_layout = self.layout_of(ptr).expect("`ptr` is not allocated from these arenas");
+            let tested_layout = self
+                .layout_of(ptr)
+                .expect("`ptr` is not allocated from these arenas");
             debug_assert!(tested_layout.size() >= layout.size());
             debug_assert!(tested_layout.align() >= layout.align());
         }
