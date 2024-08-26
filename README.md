@@ -1,6 +1,6 @@
 # Ferroc: A Multithread Lock-free Memory Allocator
 
-Ferroc (combined from "ferrous" and "malloc") is a lock-free concurrent memory allocator written in Rust, primarily inspired by [`mimalloc`](https://github.com/microsoft/mimalloc).
+Ferroc (combined from "ferrum" and "malloc") is a lock-free concurrent memory allocator written in Rust, primarily inspired by [`mimalloc`](https://github.com/microsoft/mimalloc).
 
 This memory allocator is designed to work as fast as other mainstream memory allocators while providing flexible configurations such as embedded/bare-metal environment integrations.
 
@@ -39,11 +39,11 @@ ferroc = {version = "*", default-features = false, features = ["base-mmap"]}
 use ferroc::{
     arena::Arenas,
     heap::{Heap, Context},
-    base::MmapAlloc,
+    base::Mmap,
 };
 
 fn main() {
-    let arenas = Arenas::new(MmapAlloc); // `Arenas` are `Send` & `Sync`...
+    let arenas = Arenas::new(Mmap); // `Arenas` are `Send` & `Sync`...
     let cx = Context::new(&arenas);
     let heap = Heap::new(&cx); // ...while `Context`s and `Heap`s are not.
 
@@ -67,10 +67,10 @@ fn main() {
 - Basic features: generic `Arenas`, `Context`s and `Heap`s;
 - `"stat"`: Statistics counters support;
 - `"base-static"`: Base allocator `Static`;
-- `"base-mmap"`: Base allocator `MmapAlloc` based on os-specific virtual memory managers (`std` required);
+- `"base-mmap"`: Base allocator `Mmap` based on os-specific virtual memory managers (`std` required);
 - `"global"`: Global allocator instantiation macros `config!` and `config_mod!` (inner thread local statics are leaked by default);
 - `"libc"`: `libc` dependency (currently required by `pthread` option in `config*!` if you want a `pthread` thread-local destructor);
-- `"default"`: The default global allocator `Ferroc` provided by `MmapAlloc` and `pthread` thread-local destructor (consisting of all the features above);
+- `"default"`: The default global allocator `Ferroc` provided by `Mmap` and `pthread` thread-local destructor (consisting of all the features above);
 - `"c"`: `fe_*` C functions for C/C++ targets and a generated C/C++ header `"ferroc.h"` in the root directory, and replacement for default allocator functions such as `malloc` if `--cfg sys_alloc` is specified;
 - `"track-valgrind"`: Valgrind memory tracking support based on [`crabgrind`](https://github.com/2dav/crabgrind).
 

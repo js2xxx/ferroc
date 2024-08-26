@@ -1,3 +1,7 @@
+//! The module of heaps and contexts.
+//!
+//! See [`Heap`] and [`Context`] for more information.
+
 #[cfg(feature = "stat")]
 use core::cell::RefCell;
 use core::{
@@ -15,8 +19,12 @@ use crate::{
     track, Stat,
 };
 
+/// The count of small & medium object sizes.
 pub const OBJ_SIZE_COUNT: usize = obj_size_index(ObjSizeType::LARGE_MAX) + 1;
 
+/// Gets the index of a specific object size.
+///
+/// This function is the inverse function of [`obj_size`].
 pub const fn obj_size_index(size: usize) -> usize {
     match size - 1 {
         size_m1 @ 0..=63 => size_m1 >> 3,
@@ -27,6 +35,9 @@ pub const fn obj_size_index(size: usize) -> usize {
     }
 }
 
+/// Gets the maximum object size of an object index.
+///
+/// This function is the inverse function of [`obj_size_index`].
 pub const fn obj_size(index: usize) -> usize {
     match index {
         0..=6 => (index + 1) << 3,
@@ -34,6 +45,7 @@ pub const fn obj_size(index: usize) -> usize {
     }
 }
 
+/// Gets the type of a specific object size.
 pub const fn obj_size_type(size: usize) -> ObjSizeType {
     match size {
         s if s <= ObjSizeType::SMALL_MAX => Small,
@@ -43,6 +55,7 @@ pub const fn obj_size_type(size: usize) -> ObjSizeType {
     }
 }
 
+/// The type of object sizes.
 pub enum ObjSizeType {
     Small,
     Medium,
@@ -57,6 +70,19 @@ impl ObjSizeType {
     pub const LARGE_MAX: usize = SLAB_SIZE / 2;
 }
 
+/// A memory allocator context of ferroc.
+///
+/// This structure serves as the heap storage of a specific task. It contains a
+/// reference to [a collection of arenas](Arenas) so as to avoid the overhead of
+/// `Arc<T>`.
+///
+/// Every context has its unique ID, which is for allocations to distinguish the
+/// source.
+///
+/// Contexts cannot allocate memory directly. A [`Heap`] should be created from
+/// this type and be used instead.
+///
+/// See [the crate-level documentation](crate) for its usage.
 pub struct Context<'arena, B: BaseAlloc> {
     thread_id: u64,
     arena: &'arena Arenas<B>,
@@ -67,6 +93,10 @@ pub struct Context<'arena, B: BaseAlloc> {
 }
 
 impl<'arena, B: BaseAlloc> Context<'arena, B> {
+    /// Creates a new context from a certain arena collection.
+    ///
+    /// Unlike [`Arenas::new`], this function cannot be called during constant
+    /// evaluation.
     pub fn new(arena: &'arena Arenas<B>) -> Self {
         static ID: AtomicU64 = AtomicU64::new(1);
         Context {
@@ -141,6 +171,14 @@ impl<'arena, B: BaseAlloc> Drop for Context<'arena, B> {
     }
 }
 
+/// A memory allocator unit of ferroc.
+///
+/// This type serves as the most direct interface exposed to users compared with
+/// other intermediate structures. Users usually allocate memory from this type.
+///
+/// By far, only 1 heap may exist from 1 context.
+///
+/// See [the crate-level documentation](crate) for its usage.
 pub struct Heap<'arena: 'cx, 'cx, B: BaseAlloc> {
     cx: &'cx Context<'arena, B>,
     shards: [ShardList<'arena>; OBJ_SIZE_COUNT],
@@ -149,6 +187,7 @@ pub struct Heap<'arena: 'cx, 'cx, B: BaseAlloc> {
 }
 
 impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
+    /// Creates a new heap from a memory allocator context.
     pub fn new(cx: &'cx Context<'arena, B>) -> Self {
         const MAX_HEAP_COUNT: usize = 1;
 
@@ -359,6 +398,15 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         })
     }
 
+    /// Allocate a memory block of `layout`.
+    ///
+    /// The allocation can be deallocated by other heaps referring to the same
+    /// arena collection.
+    ///
+    /// # Errors
+    ///
+    /// Errors are returned when allocation fails, see [`Error`] for more
+    /// information.
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<B>> {
         if layout.size() == 0 {
             // SAFETY: Alignments are not zero.
@@ -377,11 +425,21 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         self.pop_aligned(layout, &mut stat)
     }
 
+    /// Retrives the statstics of this heap.
+    ///
+    /// The statistics of all heaps cannot be retrieved directly. Users should
+    /// calculate it from this function.
     #[cfg(feature = "stat")]
     pub fn stat(&self) -> Stat {
         *self.cx.stat.borrow()
     }
 
+    /// Retrieves the layout information of a specific allocation.
+    ///
+    /// The layout returned may not be the same of the layout passed to
+    /// [`allocate`](Heap::allocate), but is the most fit layout of it, and can
+    /// be passed to [`deallocate`](Heap::deallocate).
+    ///
     /// # Safety
     ///
     /// `ptr` must point to an owned, valid memory block of `layout`, previously
@@ -406,6 +464,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         Some(Layout::from_size_align(size, align).unwrap())
     }
 
+    /// Deallocates an allocation previously allocated by an instance of heap
+    /// referring to the same collection of arenas.
+    ///
     /// # Safety
     ///
     /// - `ptr` must point to an owned, valid memory block of `layout`,
@@ -508,6 +569,14 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         huge.for_each(|shard| self.cx.finalize_shard(shard, stat));
     }
 
+    /// Clean up some garbage data immediately.
+    ///
+    /// In short, due to implementation details, the free list (i.e. the popper
+    /// of allocation) and the deallocation list (i.e. the pusher of
+    /// deallocation) are 2 distinct lists.
+    ///
+    /// Those 2 lists will be swapped if the former becomes empty during the
+    /// allocation process, which is precisely what this function does.
     pub fn collect(&self, force: bool) {
         let shards = self.shards.iter().flatten();
         shards.for_each(|shard| shard.collect(force));
