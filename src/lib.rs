@@ -191,7 +191,10 @@ mod test {
     use std::{thread, vec::Vec};
 
     use crate::{
-        arena::{slab_layout, Arenas, SHARD_SIZE, SLAB_SIZE}, base::{BaseAlloc, Mmap}, heap::{Context, Heap}, Ferroc
+        arena::{slab_layout, Arenas, SHARD_SIZE, SLAB_SIZE},
+        base::{BaseAlloc, Mmap},
+        heap::{Context, Heap},
+        Ferroc,
     };
 
     #[test]
