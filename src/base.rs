@@ -1,13 +1,16 @@
-#[cfg(feature = "os-mmap")]
-pub mod mmap;
+#[cfg(feature = "base-mmap")]
+mod mmap;
 
 use core::{alloc::Layout, ptr::NonNull};
+
+#[cfg(feature = "base-mmap")]
+pub use self::mmap::MmapAlloc;
 
 /// # Safety
 ///
 /// `allocate` must return a valid & free memory block containing `layout`,
 /// zeroed if `IS_ZEROED`, if possible.
-pub unsafe trait OsAlloc: Clone {
+pub unsafe trait BaseAlloc: Clone {
     const IS_ZEROED: bool;
 
     type Handle;
@@ -25,21 +28,21 @@ pub unsafe trait OsAlloc: Clone {
 /// An owned representation of a valid memory block. Implementations like
 /// `Clone` and `Copy` are banned for its unique ownership.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct Chunk<Os: OsAlloc> {
+pub struct Chunk<B: BaseAlloc> {
     ptr: NonNull<u8>,
     layout: Layout,
-    pub handle: Os::Handle,
+    pub handle: B::Handle,
 }
 
-unsafe impl<Os: OsAlloc> Send for Chunk<Os> where Os::Handle: Send {}
-unsafe impl<Os: OsAlloc> Sync for Chunk<Os> where Os::Handle: Sync {}
+unsafe impl<B: BaseAlloc> Send for Chunk<B> where B::Handle: Send {}
+unsafe impl<B: BaseAlloc> Sync for Chunk<B> where B::Handle: Sync {}
 
-impl<Os: OsAlloc> Chunk<Os> {
+impl<B: BaseAlloc> Chunk<B> {
     /// # Safety
     ///
     /// `ptr` must points to a valid & owned block of memory of `layout`, and
-    /// must be allocated from `os`.
-    pub unsafe fn new(ptr: NonNull<u8>, layout: Layout, handle: Os::Handle) -> Self {
+    /// must be allocated from `base`.
+    pub unsafe fn new(ptr: NonNull<u8>, layout: Layout, handle: B::Handle) -> Self {
         Chunk { ptr, layout, handle }
     }
 
@@ -52,10 +55,10 @@ impl<Os: OsAlloc> Chunk<Os> {
     }
 }
 
-impl<Os: OsAlloc> Drop for Chunk<Os> {
+impl<B: BaseAlloc> Drop for Chunk<B> {
     fn drop(&mut self) {
         // SAFETY: `chunk` points to a valid & owned memory block containing `layout`,
         // previously allocated by this allocator.
-        unsafe { Os::deallocate(self) }
+        unsafe { B::deallocate(self) }
     }
 }

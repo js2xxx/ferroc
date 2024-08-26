@@ -5,9 +5,13 @@ license = "MIT OR Apache-2.0"
 name = "ferroc"
 version = "0.1.0"
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 [features]
-default = ["os-mmap"]
-os-mmap = ["dep:region"]
+base-mmap = ["dep:region"]
+default = ["base-mmap", "global"]
+global = []
 
 [dependencies]
 region = {version = "3.0", optional = true}

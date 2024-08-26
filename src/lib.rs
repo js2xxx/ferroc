@@ -1,4 +1,4 @@
-#![cfg_attr(not(feature = "os-mmap"), no_std)]
+#![cfg_attr(not(feature = "base-mmap"), no_std)]
 #![feature(allocator_api)]
 #![feature(if_let_guard)]
 #![feature(isqrt)]
@@ -15,15 +15,15 @@
 extern crate alloc;
 
 pub mod arena;
-#[cfg(feature = "os-mmap")]
+pub mod base;
+#[cfg(feature = "global")]
+#[cfg_attr(feature = "base-mmap", path = "global-mmap.rs")]
 mod global;
 pub mod heap;
-mod os;
 mod slab;
 
-#[cfg(feature = "os-mmap")]
+#[cfg(feature = "global")]
 pub use self::global::*;
-pub use self::os::{Chunk, OsAlloc};
 
 #[cfg(test)]
 mod test {

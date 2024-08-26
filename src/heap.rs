@@ -7,7 +7,7 @@ use core::{
 
 use crate::{
     arena::{Arenas, Error, SHARD_SIZE, SLAB_SIZE},
-    os::OsAlloc,
+    base::BaseAlloc,
     slab::{BlockRef, Shard, ShardList, Slab},
 };
 
@@ -39,14 +39,14 @@ pub(crate) fn obj_size_index(size: usize) -> Option<usize> {
     })
 }
 
-pub struct Context<'a, Os: OsAlloc> {
+pub struct Context<'a, B: BaseAlloc> {
     thread_id: u64,
-    arena: &'a Arenas<Os>,
+    arena: &'a Arenas<B>,
     free_shards: ShardList<'a>,
 }
 
-impl<'a, Os: OsAlloc> Context<'a, Os> {
-    pub fn new(arena: &'a Arenas<Os>) -> Self {
+impl<'a, B: BaseAlloc> Context<'a, B> {
+    pub fn new(arena: &'a Arenas<B>) -> Self {
         static ID: AtomicU64 = AtomicU64::new(1);
         Context {
             thread_id: ID.fetch_add(1, Relaxed),
@@ -60,7 +60,7 @@ impl<'a, Os: OsAlloc> Context<'a, Os> {
         count: NonZeroUsize,
         align: usize,
         is_huge: bool,
-    ) -> Result<&'a Shard<'a>, Error<Os>> {
+    ) -> Result<&'a Shard<'a>, Error<B>> {
         let slab = self.arena.allocate(self.thread_id, count, align, is_huge)?;
         Ok(slab.into_shard())
     }
@@ -79,15 +79,15 @@ impl<'a, Os: OsAlloc> Context<'a, Os> {
     }
 }
 
-pub struct Heap<'a, Os: OsAlloc> {
-    cx: &'a Context<'a, Os>,
+pub struct Heap<'a, B: BaseAlloc> {
+    cx: &'a Context<'a, B>,
     shards: [ShardList<'a>; OBJ_SIZE_COUNT],
     full_shards: ShardList<'a>,
     huge_shards: ShardList<'a>,
 }
 
-impl<'a, Os: OsAlloc> Heap<'a, Os> {
-    pub fn new(cx: &'a Context<'a, Os>) -> Self {
+impl<'a, B: BaseAlloc> Heap<'a, B> {
+    pub fn new(cx: &'a Context<'a, B>) -> Self {
         Heap {
             cx,
             shards: [ShardList::DEFAULT; OBJ_SIZE_COUNT],
@@ -96,7 +96,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
         }
     }
 
-    fn pop_huge(&self, size: usize) -> Result<NonNull<[u8]>, Error<Os>> {
+    fn pop_huge(&self, size: usize) -> Result<NonNull<[u8]>, Error<B>> {
         debug_assert!(size > SHARD_SIZE);
 
         let count = (Slab::HEADER_COUNT * SHARD_SIZE + size).div_ceil(SLAB_SIZE);
@@ -109,7 +109,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
         Ok(NonNull::from_raw_parts(block.into_raw(), size))
     }
 
-    fn pop(&self, size: usize) -> Result<NonNull<[u8]>, Error<Os>> {
+    fn pop(&self, size: usize) -> Result<NonNull<[u8]>, Error<B>> {
         let index = match obj_size_index(size) {
             Some(index) => index,
             None => return self.pop_huge(size),
@@ -127,7 +127,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
     }
 
     #[cold]
-    fn pop_contended(&self, index: usize) -> Result<BlockRef<'a>, Error<Os>> {
+    fn pop_contended(&self, index: usize) -> Result<BlockRef<'a>, Error<B>> {
         let list = &self.shards[index];
 
         let pop_from_list = || {
@@ -187,7 +187,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
         Ok(pop_from_list().unwrap())
     }
 
-    fn pop_aligned(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<Os>> {
+    fn pop_aligned(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<B>> {
         let ptr = match obj_size_index(layout.size()) {
             Some(index)
                 if let Some(shard) = self.shards[index].current()
@@ -209,7 +209,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
         Ok(NonNull::from_raw_parts(ptr, layout.size()))
     }
 
-    pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<Os>> {
+    pub fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<B>> {
         if layout.size() == 0 {
             // SAFETY: Alignments are not zero.
             return Ok(unsafe {
@@ -231,7 +231,8 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
         if layout.size() == 0 {
             return;
         }
-        if layout.align() >= SLAB_SIZE {
+        if ptr.is_aligned_to(SLAB_SIZE) {
+            debug_assert!(layout.align() >= SLAB_SIZE);
             unsafe { self.cx.arena.deallocate_direct(ptr, layout) };
             return;
         }
@@ -285,7 +286,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
     }
 }
 
-impl<'a, Os: OsAlloc> Drop for Heap<'a, Os> {
+impl<'a, B: BaseAlloc> Drop for Heap<'a, B> {
     fn drop(&mut self) {
         let iter = (self.shards.iter()).chain([&self.huge_shards, &self.full_shards]);
         iter.flat_map(|l| l.drain(|_| true)).for_each(|shard| {
@@ -295,7 +296,7 @@ impl<'a, Os: OsAlloc> Drop for Heap<'a, Os> {
     }
 }
 
-unsafe impl<'a, Os: OsAlloc> Allocator for Heap<'a, Os> {
+unsafe impl<'a, B: BaseAlloc> Allocator for Heap<'a, B> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.allocate(layout).map_err(|_| AllocError)
     }
