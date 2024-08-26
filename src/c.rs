@@ -60,6 +60,20 @@ pub extern "C" fn memalign(align: usize, size: usize) -> *mut c_void {
 }
 
 #[no_mangle]
+#[cfg_attr(not(sys_alloc), export_name = "fe_valloc")]
+pub extern "C" fn valloc(size: usize) -> *mut c_void {
+    aligned_alloc(region::page::size(), size)
+}
+
+#[no_mangle]
+#[cfg_attr(not(sys_alloc), export_name = "fe_pvalloc")]
+pub extern "C" fn pvalloc(size: usize) -> *mut c_void {
+    let page_size = region::page::size();
+    let rounded_size = (size + page_size - 1) & !(page_size - 1);
+    aligned_alloc(page_size, rounded_size)
+}
+
+#[no_mangle]
 #[cfg_attr(not(sys_alloc), export_name = "fe_malloc_usable_size")]
 pub unsafe extern "C" fn malloc_usable_size(ptr: *mut c_void) -> usize {
     match NonNull::new(ptr) {
@@ -157,4 +171,34 @@ pub unsafe extern "C" fn realpath(name: *const c_char, resolved: *mut c_char) ->
     let dupped = strdup(r);
     libc::free(r as *mut c_void);
     dupped
+}
+
+#[cfg(sys_alloc)]
+mod forward {
+    use super::*;
+
+    macro_rules! forward {
+        (@IMPL $name:ident($($aname:ident, $atype:ty),*) $(-> $ret:ty)? => $target:ident) => {
+            #[no_mangle]
+            pub unsafe extern "C" fn $name($($aname: $atype),*) $(-> $ret)? {
+                $target($($aname),*)
+            }
+        };
+        ($($name:ident($($aname:ident: $atype:ty),*) $(-> $ret:ty)? => $target:ident;)*) => {
+            $(forward!(@IMPL $name($($aname, $atype),*) $(-> $ret)? => $target);)*
+        };
+    }
+
+    forward! {
+        __libc_malloc(size: usize) -> *mut c_void => malloc;
+        __libc_calloc(count: usize, size: usize) -> *mut c_void => calloc;
+        __libc_realloc(p: *mut c_void, size: usize) -> *mut c_void => realloc;
+        __libc_free(p: *mut c_void) => free;
+        __libc_cfree(p: *mut c_void) => free;
+        __libc_valloc(size: usize) -> *mut c_void => valloc;
+        __libc_pvalloc(size: usize) -> *mut c_void => pvalloc;
+        __libc_memalign(align: usize, size: usize) -> *mut c_void => memalign;
+        __posix_memalign(memptr: *mut *mut c_void, alignment: usize, size: usize) -> c_int
+            => posix_memalign;
+    }
 }
