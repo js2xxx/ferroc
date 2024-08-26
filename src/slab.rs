@@ -8,7 +8,7 @@ use core::{
     num::NonZeroUsize,
     ops::Deref,
     ptr::{self, addr_of_mut, NonNull},
-    sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering::*},
+    sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering::*},
 };
 
 pub(crate) use self::block::BlockRef;
@@ -63,6 +63,11 @@ impl<'a> SlabRef<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlabSource {
+    Arena(NonZeroUsize),
+}
+
 /// The slab data header, usually consumes a shard.
 ///
 /// # Invariant
@@ -74,7 +79,7 @@ impl<'a> SlabRef<'a> {
 // #[repr(align(4194304))] // SLAB_SIZE
 pub(crate) struct Slab<'a> {
     pub(super) thread_id: u64,
-    pub(super) arena_id: usize,
+    pub(super) source: SlabSource,
     pub(super) is_large_or_huge: bool,
     pub(super) size: usize,
     used: Cell<usize>,
@@ -133,7 +138,7 @@ impl<'a> Slab<'a> {
     /// # Safety
     ///
     /// `ptr` must be a pointer within the range of `this`.
-    unsafe fn shard_meta(this: NonNull<Self>, ptr: NonNull<()>) -> (NonNull<Shard<'a>>, usize) {
+    pub(crate) unsafe fn shard_meta(this: NonNull<Self>, ptr: NonNull<()>) -> NonNull<Shard<'a>> {
         let shards = ptr::addr_of!((*this.as_ptr()).shards);
         let index = if !unsafe { ptr::addr_of!((*this.as_ptr()).is_large_or_huge).read() } {
             (ptr.addr().get() - this.addr().get()) / SHARD_SIZE
@@ -141,39 +146,7 @@ impl<'a> Slab<'a> {
             Self::HEADER_COUNT
         };
         let shard = shards.cast::<Shard<'a>>().add(index);
-        (unsafe { NonNull::new_unchecked(shard.cast_mut()) }, index)
-    }
-
-    /// # Safety
-    ///
-    /// `ptr` must be a pointer within the range of `this`.
-    pub(crate) unsafe fn shard_infos(
-        this: NonNull<Self>,
-        ptr: NonNull<()>,
-    ) -> (NonNull<Shard<'a>>, BlockRef<'a>) {
-        // SAFETY: The same as `shard_meta`.
-        let (shard, index) = unsafe { Self::shard_meta(this, ptr) };
-        debug_assert!(index >= Self::HEADER_COUNT);
-
-        // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
-        // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
-        let ptr = if !unsafe { (*ptr::addr_of!((*shard.as_ptr()).has_aligned)).load(Relaxed) } {
-            ptr
-        } else {
-            let obj_size = unsafe { Shard::obj_size_raw(shard) };
-
-            // SAFETY: `this` is valid.
-            let area = unsafe { Self::shard_area(this, index) };
-
-            area.cast::<()>().map_addr(|addr| {
-                let offset = ptr.addr().get() - addr.get();
-                // SAFETY: `addr` is not zero, and offset is decreased, so the result is not
-                // zero.
-                unsafe { NonZeroUsize::new_unchecked(addr.get() + (offset - offset % obj_size)) }
-            })
-        };
-
-        (shard, unsafe { BlockRef::from_raw(ptr) })
+        unsafe { NonNull::new_unchecked(shard.cast_mut()) }
     }
 
     /// # Safety
@@ -183,7 +156,7 @@ impl<'a> Slab<'a> {
     pub(crate) unsafe fn init(
         ptr: NonNull<[u8]>,
         thread_id: u64,
-        arena_id: usize,
+        source: SlabSource,
         is_large_or_huge: bool,
         free_is_zero: bool,
     ) -> SlabRef<'a> {
@@ -193,7 +166,7 @@ impl<'a> Slab<'a> {
         assert_eq!(header_count, Self::HEADER_COUNT);
 
         addr_of_mut!((*slab).thread_id).write(thread_id);
-        addr_of_mut!((*slab).arena_id).write(arena_id);
+        addr_of_mut!((*slab).source).write(source);
         addr_of_mut!((*slab).is_large_or_huge).write(is_large_or_huge);
         addr_of_mut!((*slab).size).write(ptr.len());
         addr_of_mut!((*slab).used).write(Cell::new(0));
@@ -288,11 +261,46 @@ pub(crate) static EMPTY_SHARD: EmptyShard = EmptyShard(Shard {
     free: Cell::new(None),
     local_free: Cell::new(None),
     used: Cell::new(0),
-    is_in_full: Cell::new(false),
-    has_aligned: AtomicBool::new(false),
+    flags: ShardFlags(AtomicU8::new(0)),
     free_is_zero: Cell::new(false),
     thread_free: AtomicBlockRef::new(),
 });
+
+#[derive(Default)]
+pub(crate) struct ShardFlags(AtomicU8);
+
+impl ShardFlags {
+    const IS_IN_FULL: u8 = 0b0000_0001;
+    const HAS_ALIGNED: u8 = 0b0000_0010;
+
+    pub(crate) fn is_in_full(&self) -> bool {
+        self.0.load(Relaxed) & Self::IS_IN_FULL != 0
+    }
+
+    pub(crate) fn set_in_full(&self, in_full: bool) {
+        if in_full {
+            self.0.fetch_or(Self::IS_IN_FULL, Relaxed);
+        } else {
+            self.0.fetch_and(!Self::IS_IN_FULL, Relaxed);
+        }
+    }
+
+    pub(crate) fn set_align(&self) {
+        self.0.fetch_or(Self::HAS_ALIGNED, Relaxed);
+    }
+
+    pub(crate) unsafe fn test_zero(this: *const ShardFlags) -> bool {
+        (*ptr::addr_of!((*this).0)).load(Relaxed) == 0
+    }
+
+    pub(crate) unsafe fn has_aligned(this: *const ShardFlags) -> bool {
+        (*ptr::addr_of!((*this).0)).load(Relaxed) & Self::HAS_ALIGNED != 0
+    }
+
+    pub(crate) fn reset(&self) {
+        self.0.store(0, Relaxed)
+    }
+}
 
 /// A linked list of memory blocks of the same size.
 ///
@@ -315,8 +323,7 @@ pub(crate) struct Shard<'a> {
     free: Cell<Option<BlockRef<'a>>>,
     local_free: Cell<Option<BlockRef<'a>>>,
     used: Cell<usize>,
-    pub(crate) is_in_full: Cell<bool>,
-    pub(crate) has_aligned: AtomicBool,
+    pub(crate) flags: ShardFlags,
     free_is_zero: Cell<bool>,
 
     thread_free: AtomicBlockRef<'a>,
@@ -512,6 +519,30 @@ impl<'a> Shard<'a> {
         (slab, index)
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must be a pointer within the range of `this`.
+    pub(crate) unsafe fn block_of(this: NonNull<Self>, ptr: NonNull<()>) -> BlockRef<'a> {
+        // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
+        // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
+        let ptr = if !ShardFlags::has_aligned(ptr::addr_of!((*this.as_ptr()).flags)) {
+            ptr
+        } else {
+            // SAFETY: `this` is valid.
+            let obj_size = unsafe { Shard::obj_size_raw(this) };
+            // SAFETY: `this` is valid.
+            let area = unsafe { ptr::read(ptr::addr_of!((*this.as_ptr()).header.shard_area)) };
+
+            area.cast::<()>().map_addr(|addr| {
+                let offset = ptr.addr().get() - addr.get();
+                // SAFETY: `addr` is not zero, and offset is decreased, so the result is not
+                // zero.
+                unsafe { NonZeroUsize::new_unchecked(addr.get() + (offset - offset % obj_size)) }
+            })
+        };
+        unsafe { BlockRef::from_raw(ptr) }
+    }
+
     fn extend_inner(&self, obj_size: usize, capacity: usize, cap_limit: usize) {
         if cap_limit == capacity {
             return;
@@ -566,7 +597,7 @@ impl<'a> Shard<'a> {
         let usable_size = SLAB_SIZE * slab_count.get() - SHARD_SIZE * Slab::HEADER_COUNT;
         let cap_limit = usable_size / obj_size;
         self.cap_limit.set(cap_limit);
-        self.has_aligned.store(false, Relaxed);
+        self.flags.reset();
 
         self.capacity.set(0);
         self.free.set(None);
@@ -614,7 +645,7 @@ impl<'a> Shard<'a> {
         let old_obj_size = self.obj_size.swap(obj_size, Relaxed);
         let cap_limit = SHARD_SIZE / obj_size;
         self.cap_limit.set(cap_limit);
-        self.has_aligned.store(false, Relaxed);
+        self.flags.reset();
 
         self.capacity.set(0);
         self.free.set(None);

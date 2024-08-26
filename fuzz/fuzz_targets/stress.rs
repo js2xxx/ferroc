@@ -67,7 +67,7 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
 
     actions.into_iter().for_each(|action| match action {
         Action::Allocate { size, align_shift, zeroed } => {
-            let align_shift = align_shift % 24;
+            let align_shift = align_shift % 19;
             let size = size % 16777216 + 1;
             let align = 1 << align_shift;
             // eprintln!("actual size = {size:#x}, align = {align:#x}");

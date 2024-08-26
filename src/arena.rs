@@ -16,8 +16,8 @@ use core::{
 use self::bitmap::Bitmap;
 use crate::{
     base::{BaseAlloc, Chunk},
-    slab::{Slab, SlabRef},
-    track,
+    heap::ObjSizeType,
+    slab::{Slab, SlabRef, SlabSource},
 };
 
 const BYTE_WIDTH: usize = u8::BITS as usize;
@@ -38,7 +38,7 @@ pub(crate) const SHARD_SIZE: usize = 1 << SHARD_SHIFT;
 pub(crate) const SHARD_COUNT: usize = SLAB_SIZE / SHARD_SIZE;
 
 struct Arena<B: BaseAlloc> {
-    arena_id: usize,
+    arena_id: NonZeroUsize,
     chunk: Chunk<B>,
     header: Chunk<B>,
     is_exclusive: bool,
@@ -79,7 +79,7 @@ impl<B: BaseAlloc> Arena<B> {
         let arena = unsafe {
             let pointer = header.pointer().cast::<Arena<B>>();
             pointer.as_uninit_mut().write(Arena {
-                arena_id: 0,
+                arena_id: NonZeroUsize::MAX,
                 chunk,
                 header,
                 is_exclusive,
@@ -183,11 +183,9 @@ impl<B: BaseAlloc> Arena<B> {
         &self,
         thread_id: u64,
         count: usize,
-        align: usize,
         is_large_or_huge: bool,
         base: &B,
     ) -> Option<Result<SlabRef, Error<B>>> {
-        debug_assert!(align <= SLAB_SIZE);
         let ptr = self.allocate_slices(count)?;
 
         let (addr, _) = ptr.to_raw_parts();
@@ -201,7 +199,7 @@ impl<B: BaseAlloc> Arena<B> {
             Slab::init(
                 ptr,
                 thread_id,
-                self.arena_id,
+                SlabSource::Arena(self.arena_id),
                 is_large_or_huge,
                 B::IS_ZEROED,
             )
@@ -237,7 +235,6 @@ pub struct Arenas<B: BaseAlloc> {
     base: B,
     arenas: [AtomicPtr<Arena<B>>; MAX_ARENAS],
     arena_count: AtomicUsize,
-    // slab_count: AtomicUsize,
     abandoned: AtomicPtr<()>,
     abandoned_visited: AtomicPtr<()>,
 }
@@ -271,7 +268,8 @@ impl<B: BaseAlloc> Arenas<B> {
                     index = i;
                     continue;
                 }
-                arena.arena_id = index + 1;
+                // SAFETY: 1 <= index + 1 <= MAX_ARENAS
+                arena.arena_id = unsafe { NonZeroUsize::new_unchecked(index + 1) };
                 if self.arenas[index]
                     .compare_exchange(ptr::null_mut(), arena, AcqRel, Acquire)
                     .is_err()
@@ -281,20 +279,16 @@ impl<B: BaseAlloc> Arenas<B> {
                 }
                 Ok(arena)
             } else if self.arenas.iter().enumerate().any(|(index, slot)| {
-                arena.arena_id = index + 1;
+                // SAFETY: 1 <= index + 1 <= MAX_ARENAS
+                arena.arena_id = unsafe { NonZeroUsize::new_unchecked(index + 1) };
                 slot.compare_exchange(ptr::null_mut(), arena, AcqRel, Acquire)
                     .is_ok()
             }) {
                 Ok(arena)
             } else {
-                #[cfg(not(err_on_exhaustion))]
-                unreachable!("ARENA EXHAUSTED");
-                #[cfg(err_on_exhaustion)]
-                {
-                    // SAFETY: The arena is freshly allocated.
-                    unsafe { Arena::drop(arena.into()) };
-                    Err(Error::ArenaExhausted)
-                }
+                // SAFETY: The arena is freshly allocated.
+                unsafe { Arena::drop(arena.into()) };
+                Err(Error::ArenaExhausted)
             };
         }
     }
@@ -411,9 +405,9 @@ impl<B: BaseAlloc> Arenas<B> {
                 && slab.size >= count * SLAB_SIZE
                 && slab.as_ptr().is_aligned_to(align)
             {
-                let aid = slab.arena_id;
+                let source = slab.source;
                 let raw = slab.into_raw();
-                let slab = unsafe { Slab::init(raw, thread_id, aid, is_large_or_huge, false) };
+                let slab = unsafe { Slab::init(raw, thread_id, source, is_large_or_huge, false) };
                 return Some(slab);
             }
             self.push_abandoned_visited(slab);
@@ -475,26 +469,30 @@ impl<B: BaseAlloc> Arenas<B> {
     ) -> Result<SlabRef, Error<B>> {
         let count = count.get();
 
-        let reclaimed = self.try_reclaim(thread_id, count, align, is_large_or_huge);
-        let ret = match reclaimed.map(Ok).or_else(|| {
-            self.arenas(false).find_map(|(_, arena)| {
-                arena.allocate(thread_id, count, align, is_large_or_huge, &self.base)
-            })
-        }) {
-            Some(slab) => slab?,
-            None => {
-                const MIN_RESERVE_COUNT: usize = 32;
+        if let Some(reclaimed) = self.try_reclaim(thread_id, count, align, is_large_or_huge) {
+            return Ok(reclaimed);
+        }
 
-                let reserve_count = count.max(MIN_RESERVE_COUNT)
-                        /* .max(self.slab_count.load(Relaxed).isqrt()) */;
-                let arena = Arena::new(&self.base, reserve_count, Some(align), false)?;
-                let arena = self.push_arena(arena)?;
-                let res = arena.allocate(thread_id, count, align, is_large_or_huge, &self.base);
-                res.unwrap()?
+        if align <= ObjSizeType::LARGE_MAX {
+            match self.arenas(false).find_map(|(_, arena)| {
+                arena.allocate(thread_id, count, is_large_or_huge, &self.base)
+            }) {
+                Some(slab) => return slab,
+                None => {
+                    const MIN_RESERVE_COUNT: usize = 32;
+
+                    let reserve_count = count.max(MIN_RESERVE_COUNT);
+                    let arena = Arena::new(&self.base, reserve_count, None, false)?;
+                    if let Ok(arena) = self.push_arena(arena) {
+                        let res = arena.allocate(thread_id, count, is_large_or_huge, &self.base);
+                        return res.unwrap();
+                    }
+                }
             }
-        };
-        // self.slab_count.fetch_add(count, Relaxed);
-        Ok(ret)
+        }
+
+        let layout = slab_layout(count).align_to(align).unwrap();
+        Err(Error::Unsupported(layout))
     }
 
     /// # Safety
@@ -502,59 +500,16 @@ impl<B: BaseAlloc> Arenas<B> {
     /// `slab` must be previously allocated from this structure;
     pub(crate) unsafe fn deallocate(&self, slab: SlabRef) {
         if !slab.is_abandoned() {
-            let arena = self.arenas[slab.arena_id - 1].load(Acquire);
-            debug_assert!(!arena.is_null());
-            // SAFETY: `arena` is obtained from the unique `arena_id`, and the arena won't
-            // be dropped as long as any allocation from it is alive.
-            let _slab_count = unsafe { (*arena).deallocate(slab, &self.base) };
-            // self.slab_count.fetch_sub(slab_count, Relaxed);
+            #[allow(irrefutable_let_patterns)]
+            if let SlabSource::Arena(id) = slab.source {
+                let arena = self.arenas[id.get() - 1].load(Acquire);
+                debug_assert!(!arena.is_null());
+                // SAFETY: `arena` is obtained from the unique `arena_id`, and the arena won't
+                // be dropped as long as any allocation from it is alive.
+                let _slab_count = unsafe { (*arena).deallocate(slab, &self.base) };
+            }
         } else {
             self.push_abandoned(slab)
-        }
-    }
-
-    /// Allocates a block of memory using `layout` from this structure directly,
-    /// bypassing any instance of [`Heap`](crate::heap::Heap).
-    ///
-    /// The pointer must not be deallocated by any instance of `Heap` or other
-    /// instances of this type.
-    pub fn allocate_direct(&self, layout: Layout, zero: bool) -> Result<NonNull<[u8]>, Error<B>> {
-        let arena = Arena::new(
-            &self.base,
-            layout.size().div_ceil(SLAB_SIZE),
-            Some(layout.align()),
-            true,
-        )?;
-        let arena = self.push_arena(arena)?;
-        let ptr = NonNull::from_raw_parts(arena.chunk.pointer().cast(), layout.size());
-        Ok(ptr).inspect(|&ptr| crate::heap::post_alloc(ptr, B::IS_ZEROED, zero))
-    }
-
-    /// Retrieves the layout information of an allocation.
-    ///
-    /// If `ptr` was not previously allocated directly from this structure,
-    /// `None` is returned.
-    pub fn layout_of_direct(&self, ptr: NonNull<u8>) -> Option<Layout> {
-        self.arenas(true)
-            .find(|(_, arena)| arena.chunk.pointer().cast() == ptr)
-            .map(|(_, arena)| arena.chunk.layout())
-    }
-
-    /// Deallocates an allocation previously from this structure.
-    ///
-    /// # Safety
-    ///
-    /// No more aliases to the `ptr` should exist after calling this function.
-    pub unsafe fn deallocate_direct(&self, ptr: NonNull<u8>) {
-        if let Some((index, _)) = self
-            .arenas(true)
-            .find(|(_, arena)| arena.chunk.pointer().cast() == ptr)
-        {
-            track::deallocate(ptr, 0);
-            let arena = self.arenas[index].swap(ptr::null_mut(), AcqRel);
-            debug_assert!(!arena.is_null());
-            // SAFETY: `arena` is exclusive.
-            unsafe { Arena::drop(NonNull::new_unchecked(arena)) }
         }
     }
 }
@@ -579,7 +534,11 @@ pub enum Error<B: BaseAlloc> {
     ArenaExhausted,
     /// The heap is not yet initialized.
     Uninit,
+    /// Allocations for this layout is not yet supported.
+    Unsupported(Layout),
 }
+
+const _: [(); mem::needs_drop::<Error<crate::base::Mmap>>() as usize] = [];
 
 impl<B: BaseAlloc> core::fmt::Display for Error<B>
 where
@@ -591,6 +550,7 @@ where
             Error::Commit(err) => write!(f, "base commission failed: {err}"),
             Error::ArenaExhausted => write!(f, "the arena collection is full of arenas"),
             Error::Uninit => write!(f, "uninitialized heap"),
+            Error::Unsupported(layout) => write!(f, "unsupported layout: {layout:?}"),
         }
     }
 }

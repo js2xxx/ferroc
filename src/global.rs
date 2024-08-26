@@ -38,10 +38,7 @@ macro_rules! config_c {
 
         #[inline]
         pub(crate) unsafe fn free(&self, ptr: core::ptr::NonNull<u8>) {
-            match thread::with_lazy(|heap| heap.free(ptr)) {
-                Ok(_) => {}
-                _ => unreachable!(),
-            }
+            thread::with(|heap| heap.free(ptr))
         }
     };
 }
@@ -182,10 +179,7 @@ macro_rules! config_inner {
             /// - The allocation size must not be 0.
             #[inline]
             $vis unsafe fn layout_of(&self, ptr: core::ptr::NonNull<u8>) -> core::alloc::Layout {
-                match thread::with_lazy(|heap| heap.layout_of(ptr)) {
-                    Ok(layout) => layout,
-                    _ => unreachable!()
-                }
+                thread::with(|heap| heap.layout_of(ptr))
             }
 
             /// Deallocates an allocation previously allocated by an instance of this
@@ -198,10 +192,7 @@ macro_rules! config_inner {
             /// See [`core::alloc::Allocator::deallocate`] for more information.
             #[inline]
             $vis unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
-                match thread::with_lazy(|heap| heap.deallocate(ptr, layout)) {
-                    Ok(_) => {}
-                    _ => unreachable!()
-                }
+                thread::with(|heap| heap.deallocate(ptr, layout))
             }
 
             $crate::config_c!($vis);
