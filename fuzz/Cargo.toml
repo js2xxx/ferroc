@@ -17,6 +17,6 @@ path = ".."
 [[bin]]
 bench = false
 doc = false
-name = "single-thread"
-path = "fuzz_targets/single_thread.rs"
+name = "stress"
+path = "fuzz_targets/stress.rs"
 test = false
