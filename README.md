@@ -80,6 +80,36 @@ fn main() {
 - `"track-valgrind"`: Valgrind memory tracking support based on [`crabgrind`](https://github.com/2dav/crabgrind);
 - `"finer-grained"`: Add more object size types to small bins, decreasing fragmentation but also the minimal alignment from 16 to 8, potentially leading some programs that need SIMD to fail for misalignment.
 
+## Building process for C/C++ users
+
+1. Download and install the latest nightly Rust toolchain:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |\
+    sh -- -y --toolchain nightly --profile minimal -c rust-src
+```
+
+2. Just `CMake` and `make` it:
+
+```bash
+mkdir target && cd target
+cmake .. && make
+```
+
+3. If you want to install the library:
+
+```bash
+sudo make install
+```
+
+Common options like `--install-prefix` are supported naturally by CMake.
+
+There are also some custom options (via `cmake -D`) you can enable:
+
+- `FE_DEBUG`: Enable debug builds (assertions + debug infos);
+- `FE_TRACK_VALGRIND`: See [`"track-valgrind"`](#cargo-features) above;
+- `FE_FINER_GRAINED`: See [`"finer-grained"`](#cargo-features) above.
+
 ## Benchmarks
 
 Using a subset of [`mimalloc-bench`](https://github.com/daanx/mimalloc-bench) for benchmarking. Running on my laptop with 16GB of RAM and an Intel i7-10750H CPU @ 2.60GHz. The process is repeated 10 times and the results are averaged and taken as logarithms.
