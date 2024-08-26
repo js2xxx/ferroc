@@ -4,9 +4,9 @@ mod cell_link;
 use core::{
     cell::Cell,
     marker::PhantomData,
-    mem::{self, MaybeUninit},
+    mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
-    ops::Deref,
+    ops::{Deref, DerefMut},
     ptr::{self, addr_of_mut, NonNull},
     sync::atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering::*},
 };
@@ -18,17 +18,17 @@ use self::{
 };
 use crate::{
     arena::{Error, SHARD_COUNT, SHARD_SIZE, SLAB_SIZE},
-    base::BaseAlloc,
+    base::{BaseAlloc, Chunk},
 };
 
 /// A big, sharded chunk of memory.
 ///
 /// The first (few) shards are reserved for the `Slab` header.
 #[repr(transparent)]
-pub(crate) struct SlabRef<'a>(NonNull<()>, PhantomData<&'a ()>);
+pub(crate) struct SlabRef<'a, B: BaseAlloc>(NonNull<()>, PhantomData<&'a B>);
 
-impl<'a> Deref for SlabRef<'a> {
-    type Target = Slab<'a>;
+impl<'a, B: BaseAlloc> Deref for SlabRef<'a, B> {
+    type Target = Slab<'a, B>;
 
     fn deref(&self) -> &Self::Target {
         // SAFETY: The slab contains valid slab data.
@@ -36,18 +36,29 @@ impl<'a> Deref for SlabRef<'a> {
     }
 }
 
-impl<'a> SlabRef<'a> {
-    pub(crate) fn into_slab(self) -> &'a Slab<'a> {
+impl<'a, B: BaseAlloc> DerefMut for SlabRef<'a, B> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
         // SAFETY: The slab contains valid slab data.
-        unsafe { self.0.cast().as_ref() }
+        unsafe { self.0.cast().as_mut() }
+    }
+}
+
+impl<'a, B: BaseAlloc> SlabRef<'a, B> {
+    pub(crate) fn into_slab(self) -> &'a Slab<'a, B> {
+        // SAFETY: The slab contains valid slab data.
+        let ret = unsafe { self.0.cast().as_ref() };
+        mem::forget(self);
+        ret
     }
 
     pub(crate) fn into_shard(self) -> &'a Shard<'a> {
-        &self.into_slab().shards[Slab::HEADER_COUNT]
+        &self.into_slab().shards[Slab::<B>::HEADER_COUNT]
     }
 
     pub(crate) fn into_raw(self) -> NonNull<[u8]> {
-        NonNull::from_raw_parts(self.0, self.size)
+        let ret = NonNull::from_raw_parts(self.0, self.size);
+        mem::forget(self);
+        ret
     }
 
     pub(crate) fn as_ptr(&self) -> NonNull<()> {
@@ -62,9 +73,16 @@ impl<'a> SlabRef<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SlabSource {
+impl<'a, B: BaseAlloc> Drop for SlabRef<'a, B> {
+    fn drop(&mut self) {
+        // We only create a blank implementation to mock its unique ownership,
+        // and to prevent clippy from shouting `forget_non_drop`.
+    }
+}
+
+pub(crate) enum SlabSource<B: BaseAlloc> {
     Arena(NonZeroUsize),
+    Base { chunk: ManuallyDrop<Chunk<B>> },
 }
 
 /// The slab data header, usually consumes a shard.
@@ -76,9 +94,9 @@ pub(crate) enum SlabSource {
 /// its root slab reference using pointer masking without violating the
 /// ownership rules.
 // #[repr(align(4194304))] // SLAB_SIZE
-pub(crate) struct Slab<'a> {
+pub(crate) struct Slab<'a, B: BaseAlloc> {
+    pub(super) source: SlabSource<B>,
     pub(super) thread_id: u64,
-    pub(super) source: SlabSource,
     pub(super) is_large_or_huge: bool,
     pub(super) size: usize,
     used: Cell<usize>,
@@ -87,8 +105,8 @@ pub(crate) struct Slab<'a> {
     shards: [Shard<'a>; SHARD_COUNT],
 }
 
-impl<'a> Slab<'a> {
-    pub(crate) const HEADER_COUNT: usize = mem::size_of::<Slab>().div_ceil(SHARD_SIZE);
+impl<'a, B: BaseAlloc> Slab<'a, B> {
+    pub(crate) const HEADER_COUNT: usize = mem::size_of::<Self>().div_ceil(SHARD_SIZE);
 
     pub(crate) fn is_abandoned(&self) -> bool {
         self.abandoned.get() == self.used.get() && self.abandoned.get() > 0
@@ -117,7 +135,7 @@ impl<'a> Slab<'a> {
     /// The pointer must serve as an immutable reference to a direct/indirect
     /// field in a valid slab reference of `'a`.
     pub(crate) unsafe fn from_ptr<T>(ptr: NonNull<T>) -> Option<NonNull<Self>> {
-        NonNull::new(ptr.as_ptr().mask(!(SLAB_SIZE - 1)).cast::<Slab>())
+        NonNull::new(ptr.as_ptr().mask(!(SLAB_SIZE - 1)).cast::<Self>())
     }
 
     /// The shard area is owned by each corresponding shard in a similar way to
@@ -155,10 +173,10 @@ impl<'a> Slab<'a> {
     pub(crate) unsafe fn init(
         ptr: NonNull<[u8]>,
         thread_id: u64,
-        source: SlabSource,
+        source: SlabSource<B>,
         is_large_or_huge: bool,
         free_is_zero: bool,
-    ) -> SlabRef<'a> {
+    ) -> SlabRef<'a, B> {
         let slab = ptr.cast::<Self>().as_ptr();
         let header_count =
             mem::size_of_val(ptr.cast::<Self>().as_uninit_ref()).div_ceil(SHARD_SIZE);
@@ -181,14 +199,14 @@ impl<'a> Slab<'a> {
             .split_first_mut()
             .unwrap_unchecked();
         first.write(Shard::new(
-            ptr.cast(),
+            ptr.cast::<Self>(),
             Self::HEADER_COUNT,
             SHARD_COUNT - Self::HEADER_COUNT,
             free_is_zero,
         ));
         for (index, s) in rest.iter_mut().enumerate() {
             s.write(Shard::new(
-                ptr.cast(),
+                ptr.cast::<Self>(),
                 index + Self::HEADER_COUNT + 1,
                 0,
                 free_is_zero,
@@ -335,8 +353,8 @@ impl<'a> CellLinked<'a> for Shard<'a> {
 }
 
 impl<'a> Shard<'a> {
-    pub(crate) unsafe fn new(
-        slab: NonNull<Slab<'a>>,
+    pub(crate) unsafe fn new<B: BaseAlloc>(
+        slab: NonNull<Slab<'a, B>>,
         index: usize,
         shard_count: usize,
         free_is_zero: bool,
@@ -433,7 +451,7 @@ impl<'a> Shard<'a> {
             block.set_next(NonNull::new(cur).map(|p| unsafe { BlockRef::from_raw(p) }));
 
             let new = block.as_ptr();
-            match thread_free.compare_exchange_weak(cur, new, AcqRel, Acquire) {
+            match thread_free.compare_exchange_weak(cur, new, Release, Relaxed) {
                 Ok(_) => break,
                 Err(e) => cur = e,
             }
@@ -499,7 +517,10 @@ impl<'a> Shard<'a> {
 }
 
 impl<'a> Shard<'a> {
-    pub(crate) fn slab(&self) -> (&'a Slab<'a>, usize) {
+    /// # Safety
+    ///
+    /// The base allocator type must be correct.
+    pub(crate) unsafe fn slab<B: BaseAlloc>(&self) -> (&'a Slab<'a, B>, usize) {
         // SAFETY: A shard cannot be manually used on the stack.
         //
         // Every shard only associates with one slab, which resides exactly on the
@@ -510,8 +531,9 @@ impl<'a> Shard<'a> {
         let slab = unsafe { slab.as_ref() };
         #[cfg(miri)]
         let slab = unsafe {
-            assert_eq!(slab, self.header.slab);
-            self.header.slab.as_ref()
+            let header_slab = self.header.slab.cast();
+            assert_eq!(slab, header_slab);
+            header_slab.cast().as_ref()
         };
         // SAFETY: `self` must reside in the `shards` array in its `Slab`.
         let index = unsafe { (self as *const Self).sub_ptr(slab.shards.as_ptr()) };
@@ -576,7 +598,7 @@ impl<'a> Shard<'a> {
         self.extend_inner(obj_size, self.capacity.get(), self.cap_limit.get())
     }
 
-    pub(crate) fn init_large_or_huge<B: BaseAlloc>(
+    pub(crate) fn init_large_or_huge<B: BaseAlloc + 'a>(
         &self,
         obj_size: usize,
         slab_count: NonZeroUsize,
@@ -584,11 +606,11 @@ impl<'a> Shard<'a> {
     ) -> Result<(), Error<B>> {
         debug_assert!(obj_size > SHARD_SIZE);
 
-        let (slab, _) = self.slab();
+        let (slab, _) = unsafe { self.slab::<B>() };
         slab.used.set(slab.used.get() + 1);
 
         self.obj_size.store(obj_size, Relaxed);
-        let usable_size = SLAB_SIZE * slab_count.get() - SHARD_SIZE * Slab::HEADER_COUNT;
+        let usable_size = SLAB_SIZE * slab_count.get() - SHARD_SIZE * Slab::<B>::HEADER_COUNT;
         let cap_limit = usable_size / obj_size;
         self.cap_limit.set(cap_limit);
         self.flags.reset();
@@ -610,7 +632,7 @@ impl<'a> Shard<'a> {
         Ok(())
     }
 
-    pub(crate) fn init<B: BaseAlloc>(
+    pub(crate) fn init<B: BaseAlloc + 'a>(
         &self,
         obj_size: usize,
         base: &B,
@@ -622,7 +644,7 @@ impl<'a> Shard<'a> {
             return Ok(None);
         }
 
-        let (slab, index) = self.slab();
+        let (slab, index) = unsafe { self.slab::<B>() };
         slab.used.set(slab.used.get() + 1);
         let shard_count = self.shard_count.replace(1) - 1;
         debug_assert!(shard_count + index < SHARD_COUNT);
@@ -655,10 +677,10 @@ impl<'a> Shard<'a> {
         Ok(next_shard)
     }
 
-    pub(crate) fn fini(&self) -> Result<Option<&Self>, SlabRef> {
+    pub(crate) fn fini<B: BaseAlloc + 'a>(&self) -> Result<Option<&Self>, SlabRef<B>> {
         debug_assert!(!self.link.is_linked());
 
-        let (slab, _) = self.slab();
+        let (slab, _) = unsafe { self.slab::<B>() };
         if self.is_unused() {
             slab.used.set(slab.used.get() - 1);
             self.cap_limit.set(0);

@@ -160,10 +160,11 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
         count: NonZeroUsize,
         align: usize,
         is_large_or_huge: bool,
+        direct: bool,
     ) -> Result<&'arena Shard<'arena>, Error<B>> {
         let slab = self
             .arena
-            .allocate(self.thread_id, count, align, is_large_or_huge)?;
+            .allocate(self.thread_id, count, align, is_large_or_huge, direct)?;
         Ok(slab.into_shard())
     }
 
@@ -178,7 +179,7 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
                 if !slab.is_large_or_huge {
                     let _count = self
                         .free_shards
-                        .drain(|s| ptr::eq(s.slab().0, &*slab))
+                        .drain(|s| ptr::eq(unsafe { s.slab::<B>().0 }, &*slab))
                         .fold(0, |a, s| a + s.shard_count());
                 }
                 // SAFETY: All slabs are allocated from `self.arena`.
@@ -337,9 +338,9 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             // SAFETY: The heap is initialized.
             let cx = unsafe { heap.cx.unwrap_unchecked() };
 
-            let count = (Slab::HEADER_COUNT * SHARD_SIZE + size).div_ceil(SLAB_SIZE);
+            let count = (Slab::<B>::HEADER_COUNT * SHARD_SIZE + size).div_ceil(SLAB_SIZE);
             let count = NonZeroUsize::new(count).unwrap();
-            let shard = stry!(cx.alloc_slab(count, SHARD_SIZE, true,), sink);
+            let shard = stry!(cx.alloc_slab(count, SHARD_SIZE, true, true), sink);
             stry!(
                 shard.init_large_or_huge(size, count, cx.arena.base(),),
                 sink
@@ -395,10 +396,19 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         unsafe { heap.pop_contended(size, set_align, zero, err_sink) }
     }
 
-    fn find_free_from_all(&self, bin: &Bin<'arena>) -> Option<&Shard<'arena>> {
+    /// # Safety
+    ///
+    /// `cx` must be initialized.
+    unsafe fn find_free_from_all(
+        &self,
+        bin: &Bin<'arena>,
+        is_large: bool,
+        first_try: bool,
+        err_sink: impl FnOnce(Error<B>),
+    ) -> Option<&Shard<'arena>> {
         let mut cursor = bin.list.cursor_head();
         loop {
-            let shard = cursor.get()?;
+            let Some(shard) = cursor.get() else { break };
             if !shard.collect(false) {
                 shard.extend(bin.obj_size);
             }
@@ -413,15 +423,74 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             shard.flags.set_in_full(true);
             self.full_shards.push(shard);
         }
+
+        // SAFETY: `cx` is initialized.
+        let cx = unsafe { self.cx.unwrap_unchecked() };
+        macro_rules! add_fresh {
+            ($fresh:ident) => {
+                if let Some(next) = stry!($fresh.init(bin.obj_size, cx.arena.base()), err_sink) {
+                    cx.free_shards.push(next);
+                }
+                bin.list.push($fresh);
+                self.update_direct(bin);
+
+                debug_assert!($fresh.has_free());
+            };
+        }
+
+        // 1. Try to pop from the free shards;
+        if !is_large && let Some(free) = cx.free_shards.pop() {
+            add_fresh!(free);
+            return Some(free);
+        }
+
+        // 2. Try to collect & unfull some shards (freed from other threads);
+        let unfulled = self.full_shards.drain(|shard| shard.collect(false));
+        if let Some(unfulled) = {
+            unfulled.fold(None, |acc, shard| {
+                shard.flags.set_in_full(false);
+
+                let obj_size = shard.obj_size.load(Relaxed);
+                let i = obj_size_index(obj_size);
+                debug_assert!(i < OBJ_SIZE_COUNT);
+                let unfulled_bin = &self.shards[i];
+
+                unfulled_bin.list.push(shard);
+                self.update_direct(unfulled_bin);
+                acc.or_else(|| ptr::eq(bin, unfulled_bin).then_some(shard))
+            })
+        } {
+            return Some(unfulled);
+        }
+
+        // 3. Try to clear abandoned huge shards and allocate/reclaim a slab.
+
+        // SAFETY: The current function needs the heap to be initialized.
+        unsafe { self.collect_huge() };
+        let new = stry!(
+            cx.alloc_slab(NonZeroUsize::MIN, 1, is_large, !first_try),
+            err_sink
+        );
+        add_fresh!(new);
+        Some(new)
     }
 
-    fn find_free(&self, bin: &Bin<'arena>) -> Option<&Shard<'arena>> {
+    /// # Safety
+    ///
+    /// `cx` must be initialized.
+    unsafe fn find_free(
+        &self,
+        bin: &Bin<'arena>,
+        is_large: bool,
+        first_try: bool,
+        err_sink: impl FnOnce(Error<B>),
+    ) -> Option<&Shard<'arena>> {
         if let Some(shard) = bin.list.current()
             && shard.collect(false)
         {
             return Some(shard);
         }
-        self.find_free_from_all(bin)
+        self.find_free_from_all(bin, is_large, first_try, err_sink)
     }
 
     /// # Safety
@@ -439,38 +508,20 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             Huge => return self.pop_huge(size, set_align, zero, || unreachable!(), err_sink),
             ty => matches!(ty, Large),
         };
-        // SAFETY: `cx` is initialized.
-        let cx = unsafe { self.cx.unwrap_unchecked() };
-        let bin = &self.shards[obj_size_index(size.max(1))];
+        let index = obj_size_index(size.max(1));
+        debug_assert!(index < OBJ_SIZE_COUNT);
+        let bin = unsafe { self.shards.get_unchecked(index) };
 
-        if !bin.list.is_empty()
-            && let Some(shard) = self.find_free(bin)
-        {
-            debug_assert!(shard.has_free());
-            // SAFETY: `shard` has free blocks.
-            let (block, is_zeroed) = unsafe { shard.pop_block().unwrap_unchecked() };
-            return Some(post_alloc(block, size, is_zeroed, zero));
-        }
-
-        let fresh = if !is_large && let Some(free) = cx.free_shards.pop() {
-            // 1. Try to pop from the free shards;
-            free
+        let shard = if let Some(shard) = self.find_free(bin, is_large, true, err_sink) {
+            shard
         } else {
-            // 2. Try to clear abandoned huge shards and allocate/reclaim a slab.
-            // SAFETY: The current function needs the heap to be initialized.
-            unsafe { self.collect_huge() };
-            stry!(cx.alloc_slab(NonZeroUsize::MIN, 1, is_large,), err_sink)
+            self.collect(true);
+            self.find_free(bin, is_large, false, |_| {})?
         };
 
-        if let Some(next) = stry!(fresh.init(bin.obj_size, cx.arena.base(),), err_sink) {
-            cx.free_shards.push(next);
-        }
-        bin.list.push(fresh);
-        self.update_direct(bin);
-
-        debug_assert!(fresh.has_free());
+        debug_assert!(shard.has_free());
         // SAFETY: `shard` has free blocks.
-        let (block, is_zeroed) = unsafe { fresh.pop_block().unwrap_unchecked() };
+        let (block, is_zeroed) = unsafe { shard.pop_block().unwrap_unchecked() };
         Some(post_alloc(block, size, is_zeroed, zero))
     }
 
@@ -635,7 +686,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             unreachable!("{ptr:p} is not allocated from these arenas");
         }
         // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
-        let slab = unsafe { Slab::from_ptr(ptr).unwrap_unchecked() };
+        let slab = unsafe { Slab::<B>::from_ptr(ptr).unwrap_unchecked() };
         // SAFETY: The same as `shard_meta`.
         let shard = Slab::shard_meta(slab, ptr.cast());
         let obj_size = unsafe { Shard::obj_size_raw(shard) };
@@ -714,7 +765,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
 
         // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
-        let slab = unsafe { Slab::from_ptr(ptr).unwrap_unchecked() };
+        let slab = unsafe { Slab::<B>::from_ptr(ptr).unwrap_unchecked() };
         let shard = unsafe { Slab::shard_meta(slab, ptr.cast()) };
 
         let thread_id = unsafe { ptr::addr_of!((*slab.as_ptr()).thread_id).read() };

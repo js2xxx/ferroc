@@ -1,3 +1,4 @@
+//! Ported from `larson-sized`.
 #![feature(allocator_api)]
 
 use std::{
