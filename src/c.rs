@@ -4,7 +4,7 @@ use core::{
     ptr::{self, NonNull},
 };
 
-use crate::Ferroc;
+use crate::{base::Mmap, Ferroc};
 
 #[no_mangle]
 #[cfg_attr(not(sys_alloc), export_name = "fe_malloc")]
@@ -62,13 +62,13 @@ pub extern "C" fn memalign(align: usize, size: usize) -> *mut c_void {
 #[no_mangle]
 #[cfg_attr(not(sys_alloc), export_name = "fe_valloc")]
 pub extern "C" fn valloc(size: usize) -> *mut c_void {
-    aligned_alloc(region::page::size(), size)
+    aligned_alloc(Mmap.page_size(), size)
 }
 
 #[no_mangle]
 #[cfg_attr(not(sys_alloc), export_name = "fe_pvalloc")]
 pub extern "C" fn pvalloc(size: usize) -> *mut c_void {
-    let page_size = region::page::size();
+    let page_size = Mmap.page_size();
     let rounded_size = (size + page_size - 1) & !(page_size - 1);
     aligned_alloc(page_size, rounded_size)
 }
