@@ -98,7 +98,7 @@ impl<B: BaseAlloc> Arena<B> {
     }
 
     fn new<'a>(
-        base: B,
+        base: &B,
         slab_count: usize,
         align: Option<usize>,
         is_exclusive: bool,
@@ -112,20 +112,20 @@ impl<B: BaseAlloc> Arena<B> {
 
         let header_layout = Self::header_layout(slab_count, is_exclusive);
 
-        let chunk = base.clone().allocate(layout).map_err(Error::Base)?;
-        let header = base.allocate(header_layout).map_err(Error::Base)?;
+        let chunk = base.allocate(layout, is_exclusive).map_err(Error::Alloc)?;
+        let header = base.allocate(header_layout, true).map_err(Error::Alloc)?;
 
         // SAFETY: `header` is valid.
         Ok(unsafe { Self::from_dynamic(header, chunk, is_exclusive, slab_count) })
     }
 
-    fn new_chunk<'a>(base: B, chunk: Chunk<B>) -> Result<&'a mut Self, Error<B>> {
+    fn new_chunk<'a>(base: &B, chunk: Chunk<B>) -> Result<&'a mut Self, Error<B>> {
         let size = chunk.pointer().len();
         let slab_count = size / SLAB_SIZE;
         assert!(chunk.pointer().is_aligned_to(SLAB_SIZE));
 
         let header_layout = Self::header_layout(slab_count, false);
-        let header = base.allocate(header_layout).map_err(Error::Base)?;
+        let header = base.allocate(header_layout, true).map_err(Error::Alloc)?;
 
         Ok(unsafe { Self::from_dynamic(header, chunk, false, slab_count) })
     }
@@ -183,11 +183,15 @@ impl<B: BaseAlloc> Arena<B> {
         count: usize,
         align: usize,
         is_large_or_huge: bool,
-    ) -> Option<SlabRef> {
+        base: &B,
+    ) -> Option<Result<SlabRef, Error<B>>> {
         debug_assert!(align <= SLAB_SIZE);
         let ptr = self.allocate_slices(count)?;
+
+        let (addr, _) = ptr.to_raw_parts();
+        let commit = base.commit(NonNull::from_raw_parts(addr, mem::size_of::<Slab>()));
         // SAFETY: The fresh allocation is aligned to `SLAB_SIZE`.
-        Some(unsafe {
+        let res = commit.map(|_| unsafe {
             Slab::init(
                 ptr,
                 thread_id,
@@ -195,7 +199,8 @@ impl<B: BaseAlloc> Arena<B> {
                 is_large_or_huge,
                 B::IS_ZEROED,
             )
-        })
+        });
+        Some(res.map_err(Error::Commit))
     }
 
     /// # Safety
@@ -203,8 +208,10 @@ impl<B: BaseAlloc> Arena<B> {
     /// - `slab` must be previously allocated from this arena;
     /// - No more references to the `slab` or its shards exist after calling
     ///   this function.
-    unsafe fn deallocate(&self, slab: SlabRef) -> usize {
-        let (ptr, len) = slab.into_raw().to_raw_parts();
+    unsafe fn deallocate(&self, slab: SlabRef, base: &B) -> usize {
+        let raw = slab.into_raw();
+        unsafe { base.decommit(raw) };
+        let (ptr, len) = raw.to_raw_parts();
         let offset = unsafe { ptr.cast::<u8>().sub_ptr(self.chunk.pointer().cast()) };
 
         let (start, end) = (offset / SLAB_SIZE, (offset + len) / SLAB_SIZE);
@@ -319,7 +326,7 @@ impl<B: BaseAlloc> Arenas<B> {
     }
 
     pub fn manage(&self, chunk: Chunk<B>) -> Result<(), Error<B>> {
-        let arena = Arena::new_chunk(self.base.clone(), chunk)?;
+        let arena = Arena::new_chunk(&self.base, chunk)?;
         self.push_arena(arena)?;
         Ok(())
     }
@@ -341,21 +348,20 @@ impl<B: BaseAlloc> Arenas<B> {
         let mut retry = 0;
         let ret = loop {
             self.collect_abandoned();
-            match self
-                .arenas(false)
-                .find_map(|(_, arena)| arena.allocate(thread_id, count, align, is_large_or_huge))
-            {
-                Some(slab) => break slab,
+            match self.arenas(false).find_map(|(_, arena)| {
+                arena.allocate(thread_id, count, align, is_large_or_huge, &self.base)
+            }) {
+                Some(slab) => break slab?,
                 None if retry < 3 => retry += 1,
                 None => {
                     const MIN_RESERVE_COUNT: usize = 32;
 
                     let reserve_count = count.max(MIN_RESERVE_COUNT)
                         /* .max(self.slab_count.load(Relaxed).isqrt()) */;
-                    let arena = Arena::new(self.base.clone(), reserve_count, Some(align), false)?;
+                    let arena = Arena::new(&self.base, reserve_count, Some(align), false)?;
                     let arena = self.push_arena(arena)?;
-                    let res = arena.allocate(thread_id, count, align, is_large_or_huge);
-                    break res.unwrap();
+                    let res = arena.allocate(thread_id, count, align, is_large_or_huge, &self.base);
+                    break res.unwrap()?;
                 }
             }
         };
@@ -372,7 +378,7 @@ impl<B: BaseAlloc> Arenas<B> {
             debug_assert!(!arena.is_null());
             // SAFETY: `arena` is obtained from the unique `arena_id`, and the arena won't
             // be dropped as long as any allocation from it is alive.
-            let _slab_count = unsafe { (*arena).deallocate(slab) };
+            let _slab_count = unsafe { (*arena).deallocate(slab, &self.base) };
             // self.slab_count.fetch_sub(slab_count, Relaxed);
         } else {
             self.push_abandoned(slab)
@@ -381,7 +387,7 @@ impl<B: BaseAlloc> Arenas<B> {
 
     pub fn allocate_direct(&self, layout: Layout) -> Result<NonNull<[u8]>, Error<B>> {
         let arena = Arena::new(
-            self.base.clone(),
+            &self.base,
             layout.size().div_ceil(SLAB_SIZE),
             Some(layout.align()),
             true,
@@ -435,6 +441,7 @@ impl<B: BaseAlloc> Drop for Arenas<B> {
 
 #[derive(Debug)]
 pub enum Error<B: BaseAlloc> {
-    Base(B::Error),
+    Alloc(B::Error),
+    Commit(B::Error),
     ArenaExhausted,
 }

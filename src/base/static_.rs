@@ -92,7 +92,7 @@ unsafe impl<const HEADER_CAP: usize> BaseAlloc for &'static Static<HEADER_CAP> {
 
     type Error = AllocError;
 
-    fn allocate(self, layout: Layout) -> Result<Chunk<Self>, AllocError> {
+    fn allocate(&self, layout: Layout, _commit: bool) -> Result<Chunk<Self>, AllocError> {
         self.alloc_inner(layout).ok_or(AllocError)
     }
 

@@ -178,7 +178,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let count = NonZeroUsize::new(count).unwrap();
         let shard = self.cx.alloc_slab(count, SLAB_SIZE, true, stat)?;
         shard.slab().0.inc_used();
-        shard.init_large_or_huge(size, count, stat);
+        shard.init_large_or_huge(size, count, self.cx.arena.base(), stat)?;
         self.huge_shards.push(shard);
 
         let block = shard.pop_block().unwrap();
@@ -282,7 +282,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 _stat.free_shards -= free.shard_count();
             }
             free.slab().0.inc_used();
-            if let Some(next) = free.init(obj_size(index), _stat) {
+            if let Some(next) = free.init(obj_size(index), self.cx.arena.base(), _stat)? {
                 self.cx.free_shards.push(next);
                 #[cfg(feature = "stat")]
                 {
@@ -290,6 +290,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 }
             }
             list.push(free);
+            Ok(())
         };
 
         if !list.is_empty()
@@ -301,7 +302,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let is_large = matches!(ty, Large);
         if !is_large && let Some(free) = self.cx.free_shards.pop() {
             // 1. Try to pop from the free shards;
-            add_free(free, stat);
+            add_free(free, stat)?;
         } else {
             // 2. Try to collect potentially unfull shards.
             let unfulled = self.full_shards.drain(|shard| {
@@ -322,7 +323,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
                 let free = self
                     .cx
                     .alloc_slab(NonZeroUsize::MIN, SLAB_SIZE, is_large, stat)?;
-                add_free(free, stat);
+                add_free(free, stat)?;
             }
         }
 

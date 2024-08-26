@@ -212,11 +212,6 @@ impl Bitmap {
     pub fn set<const VALUE: bool>(&self, range: Range<u32>) -> (bool, bool) {
         self.walk_storage(range, StorageExt::set::<VALUE>)
     }
-
-    // #[inline]
-    // pub fn get(&self, range: Range<u32>) -> (bool, bool) {
-    //     self.walk_storage(range, StorageExt::get)
-    // }
 }
 
 #[inline]
@@ -228,7 +223,6 @@ fn mask(range: Range<u32>) -> usize {
 }
 
 trait StorageExt {
-    fn get(&self, range: Range<u32>) -> (bool, bool);
     fn allocate(&self, count: u32) -> Option<u32>;
 
     fn set<const VALUE: bool>(&self, range: Range<u32>) -> (bool, bool);
@@ -267,12 +261,5 @@ impl StorageExt for AtomicUsize {
             false => self.fetch_and(!mask, AcqRel),
         };
         (prev & mask != mask, prev & mask != 0)
-    }
-
-    #[inline]
-    fn get(&self, range: Range<u32>) -> (bool, bool) {
-        let mask = mask(range);
-        let value = self.load(Relaxed);
-        (value & mask != mask, value & mask != 0)
     }
 }
