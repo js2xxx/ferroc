@@ -4,7 +4,7 @@ Ferroc (combined from "ferrous" and "malloc") is a lock-free concurrent memory a
 
 This memory allocator is designed to work as fast as other mainstream memory allocators while providing flexible configurations such as embedded/bare-metal environment integrations.
 
-## Usage
+## Examples
 
 If you simply want to utilize another memory allocator, you can use Ferroc as the global allocator with default features:
 
@@ -29,6 +29,10 @@ fn main() {
 ```
 
 If you want more control over the allocator, you can disable the default features and enable the ones you need:
+
+```toml
+ferroc = {version = "*", default-features = false, features = ["base-mmap"]}
+```
 
 ```rust
 #![feature(allocator_api)]
@@ -57,6 +61,20 @@ fn main() {
     heap.collect(/* force */false);
 }
 ```
+
+## Cargo Features
+
+- Basic structures: `Arenas`, `Context`s and `Heap`s;
+- `"base-mmap"`: Base allocator `MmapAlloc` based on os-specific virtual memory managers (`std` required);
+- `"base-baremetal"`: Base allocator `BareMetal`;
+- `"global"`: Global allocator instantiation macros `config!` and `config_mod!`;
+- `"libc"`: `libc` dependency (currently required by `pthread` option in `config*!` if you want a `pthread` thread-local destructor);
+- `"default"`: The default global allocator `Ferroc` provided by `MmapAlloc` and `pthread` thread-local destructor (consisting of all the features above);
+- `"c"`: `fe_*` C functions for C/C++ targets and a generated C/C++ header `"ferroc.h"` in the root directory, and replacement for default allocator functions such as `malloc` if `--cfg sys_alloc` is specified.
+
+## Caveats
+
+This crate only supports the latest nightly Rust compiler currently and utilizes many unstable  features. Use it with care.
 
 ### License
 
