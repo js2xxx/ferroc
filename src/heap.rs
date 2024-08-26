@@ -96,7 +96,16 @@ impl ObjSizeType {
     /// The maximal size of medium-sized objects.
     pub const MEDIUM_MAX: usize = SHARD_SIZE / 2;
     /// The maximal size of larget-sized objects.
-    pub const LARGE_MAX: usize = SLAB_SIZE / 2;
+    // Should not be more than (SLAB_SIZE - SHARD_SIZE * HEADER_COUNT) / 2.
+    pub const LARGE_MAX: usize = const_min((SLAB_SIZE - SHARD_SIZE) / 2, SLAB_SIZE * 15 / 32);
+}
+
+const fn const_min(a: usize, b: usize) -> usize {
+    if a < b {
+        a
+    } else {
+        b
+    }
 }
 
 /// A memory allocator context of ferroc.

@@ -648,6 +648,7 @@ impl<'a> Shard<'a> {
 
         if obj_size > ObjSizeType::MEDIUM_MAX {
             self.init_large_or_huge(obj_size, NonZeroUsize::MIN, base)?;
+            debug_assert!(self.cap_limit.get() > 1);
             return Ok(None);
         }
 
