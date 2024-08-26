@@ -1,10 +1,17 @@
+#[cfg(feature = "base-baremetal")]
+mod bare;
 #[cfg(feature = "base-mmap")]
 mod mmap;
 
 use core::{alloc::Layout, ptr::NonNull};
 
+#[cfg(feature = "base-baremetal")]
+pub use self::bare::BareMetal;
 #[cfg(feature = "base-mmap")]
 pub use self::mmap::MmapAlloc;
+
+/// A static memory handle, unable to be deallocated any longer.
+pub struct Static;
 
 /// # Safety
 ///
@@ -46,6 +53,17 @@ impl<B: BaseAlloc> Chunk<B> {
         Chunk { ptr, layout, handle }
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must points to a valid, owned & static block of memory of
+    /// `layout`.
+    pub unsafe fn from_static(ptr: NonNull<u8>, layout: Layout) -> Self
+    where
+        B: BaseAlloc<Handle = Static>,
+    {
+        Self::new(ptr, layout, Static)
+    }
+
     pub fn layout(&self) -> Layout {
         self.layout
     }
@@ -53,6 +71,8 @@ impl<B: BaseAlloc> Chunk<B> {
     pub fn pointer(&self) -> NonNull<[u8]> {
         NonNull::slice_from_raw_parts(self.ptr, self.layout.size())
     }
+
+    // pub fn into_static(self)
 }
 
 impl<B: BaseAlloc> Drop for Chunk<B> {

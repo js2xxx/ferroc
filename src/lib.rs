@@ -10,7 +10,9 @@
 #![feature(ptr_metadata)]
 #![feature(ptr_sub_ptr)]
 #![feature(strict_provenance)]
-#![cfg_attr(all(feature = "global", feature = "base-mmap"), feature(thread_local))]
+#![cfg_attr(feature = "global", allow(internal_features))]
+#![cfg_attr(feature = "global", feature(allow_internal_unsafe))]
+#![cfg_attr(feature = "global", feature(allow_internal_unstable))]
 
 #[cfg(test)]
 extern crate std;
@@ -20,7 +22,6 @@ pub mod base;
 #[cfg(feature = "c")]
 mod c;
 #[cfg(feature = "global")]
-#[cfg_attr(feature = "base-mmap", path = "global-mmap.rs")]
 mod global;
 pub mod heap;
 mod slab;
@@ -30,9 +31,11 @@ mod stat;
 #[cfg(not(feature = "stat"))]
 type Stat = ();
 
-#[cfg(feature = "global")]
-#[allow(unused_imports)]
-pub use self::global::*;
+#[cfg(feature = "default")]
+config_mod!(global_mmap: pub crate::base::MmapAlloc: pthread);
+
+#[cfg(feature = "default")]
+pub use self::global_mmap::*;
 #[cfg(feature = "stat")]
 pub use self::stat::Stat;
 
