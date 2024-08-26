@@ -270,7 +270,7 @@ impl<B: BaseAlloc> Arenas<B> {
             .filter(move |(_, arena)| arena.is_exclusive == is_exclusive)
     }
 
-    pub fn os_alloc(&self) -> &B {
+    pub fn base(&self) -> &B {
         &self.base
     }
 
