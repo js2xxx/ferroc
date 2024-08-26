@@ -80,7 +80,7 @@ fn main() {
 - `"default"`: The default global allocator `Ferroc` provided by `Mmap` and `pthread` thread-local destructor (consisting of all the features above);
 - `"c"`: `fe_*` C functions for C/C++ targets and a generated C/C++ header `"ferroc.h"` in the root directory;
 - `"c-override"`: Override default allocator functions such as `malloc/free` and `operator new/delete`, which can be useful for embedding Ferroc in a C/C++ project (see [this section](#building-process-for-cc-users) for more details);
-- `"track-valgrind"`: Valgrind memory tracking support based on [`crabgrind`](https://github.com/2dav/crabgrind);
+- `"track-valgrind"`: Valgrind memory tracking support based on [`crabgrind`](https://github.com/2dav/crabgrind), which requires Valgrind's version of at least 3.22;
 - `"finer-grained"`: Add more object size types to small bins, decreasing fragmentation but also the minimal alignment from 16 to 8, potentially leading some programs that need SIMD to fail for misalignment.
 
 ## Building process for C/C++ users
