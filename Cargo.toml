@@ -6,8 +6,8 @@ name = "ferroc"
 version = "0.1.0"
 
 [features]
-default = ["std"]
-std = ["dep:region"]
+default = ["os-mmap"]
+os-mmap = ["dep:region"]
 
 [dependencies]
 region = {version = "3.0", optional = true}

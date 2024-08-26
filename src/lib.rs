@@ -1,4 +1,4 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+#![no_std]
 #![feature(allocator_api)]
 #![feature(if_let_guard)]
 #![feature(isqrt)]
@@ -12,16 +12,20 @@
 #![feature(slice_ptr_get)]
 #![feature(strict_provenance)]
 
+#[cfg(test)]
+extern crate alloc;
+
 pub mod arena;
 pub mod heap;
 pub mod os;
 mod slab;
 
-#[cfg(feature = "std")]
+#[cfg(feature = "os-mmap")]
 pub use os::mmap::MmapAlloc;
 
 #[cfg(test)]
 mod test {
+    use alloc::vec::Vec;
     use core::{
         alloc::{Allocator, Layout},
         iter,

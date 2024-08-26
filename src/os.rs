@@ -1,4 +1,4 @@
-#[cfg(feature = "std")]
+#[cfg(feature = "os-mmap")]
 pub mod mmap;
 
 use core::{alloc::Layout, ptr::NonNull};
