@@ -1,5 +1,5 @@
-#[cfg(feature = "base-baremetal")]
-mod bare;
+#[cfg(feature = "base-static")]
+mod static_;
 #[cfg(feature = "base-mmap")]
 mod mmap;
 
@@ -9,13 +9,14 @@ use core::{
     ptr::NonNull,
 };
 
-#[cfg(feature = "base-baremetal")]
-pub use self::bare::BareMetal;
+#[cfg(feature = "base-static")]
+pub use self::static_::Static;
 #[cfg(feature = "base-mmap")]
 pub use self::mmap::MmapAlloc;
 
 /// A static memory handle, unable to be deallocated any longer.
-pub struct Static;
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StaticHandle;
 
 /// # Safety
 ///
@@ -107,9 +108,9 @@ impl<B: BaseAlloc> Chunk<B> {
     /// `layout`.
     pub unsafe fn from_static(ptr: NonNull<u8>, layout: Layout) -> Self
     where
-        B: BaseAlloc<Handle = Static>,
+        B: BaseAlloc<Handle = StaticHandle>,
     {
-        Self::new(ptr, layout, Static)
+        Self::new(ptr, layout, StaticHandle)
     }
 
     pub fn layout(&self) -> Layout {
