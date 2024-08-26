@@ -189,6 +189,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
                 Some(block) => break Some(block),
                 None => {
                     cursor.remove();
+                    shard.is_in_full.set(true);
                     self.full_shards.push(shard)
                 }
             }
@@ -237,7 +238,7 @@ impl<'a, Os: OsAlloc> Heap<'a, Os> {
         if self.cx.id == id {
             // `id` matches; We're deallocating from the same thread.
             let shard = unsafe { shard.as_ref() };
-            let was_full = shard.is_full();
+            let was_full = shard.is_in_full.replace(false);
             let is_unused = shard.push_block(block);
 
             if let Some(index) = obj_size_index(obj_size) {

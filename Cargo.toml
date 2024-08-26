@@ -11,3 +11,7 @@ std = ["dep:region"]
 
 [dependencies]
 region = {version = "3.0", optional = true}
+
+[workspace]
+members = ["fuzz"]
+resolver = "2"

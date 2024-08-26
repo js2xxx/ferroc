@@ -178,6 +178,7 @@ pub struct Shard<'a> {
     free: Cell<Option<BlockRef<'a>>>,
     local_free: Cell<Option<BlockRef<'a>>>,
     used: Cell<usize>,
+    pub(crate) is_in_full: Cell<bool>,
     free_is_zero: Cell<bool>,
 
     pub(crate) thread_free: AtomicBlockRef<'a>,
