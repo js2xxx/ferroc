@@ -2,9 +2,10 @@ cmake_minimum_required(VERSION 3.22)
 
 project(ferroc)
 
-option(FE_DEBUG, "Compile with debug symbols" OFF)
 option(FE_TRACK_VALGRIND, "Compile with valgrind support" OFF)
 option(FE_FINER_GRAINED, "Increase heap efficiency while decreasing minimal alignment from 16 to 8" OFF)
+
+include(GNUInstallDirs)
 
 find_program(
     CARGO cargo
@@ -56,18 +57,23 @@ else()
 endif()
 
 if(NOT CMAKE_BUILD_TYPE)
-    if ("${CMAKE_BINARY_DIR}" MATCHES ".*(D|d)ebug$" OR FE_DEBUG)
+    if ("${CMAKE_BINARY_DIR}" MATCHES ".*(D|d)ebug$")
         message(STATUS "No build type selected, default to: Debug")
         set(CMAKE_BUILD_TYPE "Debug")
-        set(BUILD_FLAGS "")
-        set(BUILD_SUBDIR debug)
     else()
         message(STATUS "No build type selected, default to: Release")
         set(CMAKE_BUILD_TYPE "Release")
-        set(BUILD_FLAGS "--release")
-        set(BUILD_SUBDIR release)
     endif()
 endif()
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+
+set(BUILD_FLAGS)
+set(BUILD_SUBDIR debug)
+if(CMAKE_BUILD_TYPE MATCHES "Rel.*")
+    set(BUILD_FLAGS "--release")
+    set(BUILD_SUBDIR release)
+endif()
+message(STATUS "Using profile: ${BUILD_SUBDIR}")
 
 if(FE_TRACK_VALGRIND)
     set(BUILD_FLAGS ${BUILD_FLAGS} --features track-valgrind)
@@ -90,18 +96,17 @@ set(HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/ferroc.h)
 message(STATUS "Building static library: ${STATIC_LIB}")
 message(STATUS "Building shared library: ${SHARED_LIB}")
 
-set(RUST_DEBUG_FLAGS "-Cdebuginfo=2")
-
 set(RUSTFLAGS "--cfg sys_alloc -Ztls-model=initial-exec -Cpanic=abort")
-if(FE_DEBUG)
-    set(RUSTFLAGS "${RUSTFLAGS} ${RUST_DEBUG_FLAGS}")
+if(CMAKE_BUILD_TYPE MATCHES ".*Deb.*")
+    set(RUSTFLAGS "${RUSTFLAGS} -Cdebuginfo=2")
 endif()
 message(STATUS "Rustc flags: ${RUSTFLAGS}")
 
 add_custom_command(
     OUTPUT ${STATIC_LIB} ${SHARED_LIB}
     BYPRODUCTS ${HEADERS}
-    COMMAND ${CARGO} +nightly build ${BUILD_FLAGS} --features c
+    COMMAND ${CMAKE_COMMAND} -E env RUSTFLAGS=${RUSTFLAGS}
+        ${CARGO} +nightly build ${BUILD_FLAGS} --features c
         -Zbuild-std=core,std,panic_abort -Zbuild-std-features=
         --target ${TRIPLE}
     DEPENDS ${SRC}
