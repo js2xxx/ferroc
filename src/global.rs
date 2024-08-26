@@ -18,6 +18,7 @@ macro_rules! config_stat {
 }
 
 #[macro_export]
+#[allow_internal_unstable(allocator_api)]
 macro_rules! config {
     (@TYPES $vis:vis, $bt:ty) => {
         $vis type Heap<'arena, 'cx> = $crate::heap::Heap<'arena, 'cx, $bt>;
