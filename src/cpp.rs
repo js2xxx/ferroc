@@ -17,8 +17,8 @@ unsafe fn new_handler(nothrow: bool) -> bool {
     type CppNewHandler = unsafe extern "C" fn();
 
     #[linkage = "weak"]
-    #[cfg_attr(unix, export_name = "_ZSt15get_new_handlerv")]
-    #[cfg_attr(windows, export_name = "?get_new_handler@std@@YAP6AXXZXZ")]
+    #[cfg_attr(unix, unsafe(export_name = "_ZSt15get_new_handlerv"))]
+    #[cfg_attr(windows, unsafe(export_name = "?get_new_handler@std@@YAP6AXXZXZ"))]
     extern "C" fn get_new_handler() -> Option<CppNewHandler> {
         None
     }
@@ -52,7 +52,7 @@ unsafe fn try_allocate(layout: Layout, nothrow: bool) -> *mut c_void {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_new(size: usize) -> *mut c_void {
     match Ferroc.malloc(size, false) {
         Some(ptr) => ptr.as_ptr().cast(),
@@ -60,7 +60,7 @@ pub unsafe extern "C" fn fe_new(size: usize) -> *mut c_void {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_new_nothrow(size: usize, _: NoThrow) -> *mut c_void {
     match Ferroc.malloc(size, false) {
         Some(ptr) => ptr.as_ptr().cast(),
@@ -68,7 +68,7 @@ pub unsafe extern "C" fn fe_new_nothrow(size: usize, _: NoThrow) -> *mut c_void 
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_alloc(size: usize, align: usize) -> *mut c_void {
     let Ok(layout) = Layout::from_size_align(size, align) else {
         unsafe { new_handler(false) };
@@ -80,7 +80,7 @@ pub unsafe extern "C" fn fe_alloc(size: usize, align: usize) -> *mut c_void {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_alloc_nothrow(size: usize, align: usize, _: NoThrow) -> *mut c_void {
     let Ok(layout) = Layout::from_size_align(size, align) else {
         unsafe { new_handler(true) };
@@ -92,7 +92,7 @@ pub unsafe extern "C" fn fe_alloc_nothrow(size: usize, align: usize, _: NoThrow)
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_free_sized(p: *mut c_void, size: usize) {
     if let Some(ptr) = NonNull::new(p)
         && let Ok(layout) = Layout::from_size_align(size, 1)
@@ -101,7 +101,7 @@ pub unsafe extern "C" fn fe_free_sized(p: *mut c_void, size: usize) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_free_aligned(p: *mut c_void, align: usize) {
     if let Some(ptr) = NonNull::new(p)
         && let Ok(layout) = Layout::from_size_align(1, align)
@@ -110,7 +110,7 @@ pub unsafe extern "C" fn fe_free_aligned(p: *mut c_void, align: usize) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_dealloc(p: *mut c_void, size: usize, align: usize) {
     if let Some(ptr) = NonNull::new(p)
         && let Ok(layout) = Layout::from_size_align(size, align)

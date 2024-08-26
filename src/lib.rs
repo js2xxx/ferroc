@@ -146,6 +146,7 @@
 #![feature(ptr_sub_ptr)]
 #![feature(strict_provenance)]
 #![cfg_attr(feature = "c", feature(linkage))]
+#![cfg_attr(feature = "c", feature(unsafe_attributes))]
 #![cfg_attr(feature = "global", allow(internal_features))]
 #![cfg_attr(feature = "global", feature(allow_internal_unsafe))]
 #![cfg_attr(feature = "global", feature(allow_internal_unstable))]
@@ -156,7 +157,7 @@ extern crate std;
 #[cfg(feature = "c")]
 macro_rules! forward {
     (@IMPL $name:ident($($aname:ident, $atype:ty),*) $(-> $ret:ty)? => $target:ident) => {
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         #[cfg(feature = "c-override")]
         pub unsafe extern "C" fn $name($($aname: $atype),*) $(-> $ret)? {
             #[allow(unused_unsafe)]

@@ -6,14 +6,14 @@ use core::{
 
 use crate::{base::Mmap, Ferroc};
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fe_malloc(size: usize) -> *mut c_void {
     Ferroc
         .malloc(size, false)
         .map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_posix_memalign(
     slot: *mut *mut c_void,
     align: usize,
@@ -32,7 +32,7 @@ pub unsafe extern "C" fn fe_posix_memalign(
     libc::ENOMEM
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fe_aligned_alloc(align: usize, size: usize) -> *mut c_void {
     let Ok(layout) = Layout::from_size_align(size, align) else {
         return ptr::null_mut();
@@ -40,7 +40,7 @@ pub extern "C" fn fe_aligned_alloc(align: usize, size: usize) -> *mut c_void {
     Allocator::allocate(&Ferroc, layout).map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fe_memalign(align: usize, size: usize) -> *mut c_void {
     let Ok(layout) = Layout::from_size_align(size, align) else {
         return ptr::null_mut();
@@ -48,19 +48,19 @@ pub extern "C" fn fe_memalign(align: usize, size: usize) -> *mut c_void {
     Allocator::allocate(&Ferroc, layout).map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fe_valloc(size: usize) -> *mut c_void {
     fe_aligned_alloc(Mmap.page_size(), size)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fe_pvalloc(size: usize) -> *mut c_void {
     let page_size = Mmap.page_size();
     let rounded_size = (size + page_size - 1) & !(page_size - 1);
     fe_aligned_alloc(page_size, rounded_size)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_malloc_size(ptr: *mut c_void) -> usize {
     match NonNull::new(ptr) {
         Some(ptr) => unsafe { Ferroc.layout_of(ptr.cast()).size() },
@@ -68,14 +68,14 @@ pub unsafe extern "C" fn fe_malloc_size(ptr: *mut c_void) -> usize {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_free(ptr: *mut c_void) {
     if let Some(ptr) = NonNull::new(ptr) {
         unsafe { Ferroc.free(ptr.cast()) }
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn fe_calloc(nmemb: usize, size: usize) -> *mut c_void {
     let Some(size) = nmemb.checked_mul(size) else {
         return ptr::null_mut();
@@ -85,7 +85,7 @@ pub extern "C" fn fe_calloc(nmemb: usize, size: usize) -> *mut c_void {
         .map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_realloc(ptr: *mut c_void, new_size: usize) -> *mut c_void {
     let Some(ptr) = NonNull::new(ptr) else {
         return fe_malloc(new_size);
@@ -112,7 +112,7 @@ pub unsafe extern "C" fn fe_realloc(ptr: *mut c_void, new_size: usize) -> *mut c
     new
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_strdup(s: *const c_char) -> *mut c_char {
     let len = unsafe { libc::strlen(s) };
     let ptr = fe_malloc(len + 1).cast::<c_char>();
@@ -125,7 +125,7 @@ pub unsafe extern "C" fn fe_strdup(s: *const c_char) -> *mut c_char {
     ptr
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_strndup(s: *const c_char, n: usize) -> *mut c_char {
     let len = unsafe { libc::strnlen(s, n) };
     let ptr = fe_malloc(len + 1).cast::<c_char>();
@@ -138,7 +138,7 @@ pub unsafe extern "C" fn fe_strndup(s: *const c_char, n: usize) -> *mut c_char {
     ptr
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn fe_realpath(name: *const c_char, resolved: *mut c_char) -> *mut c_char {
     if !resolved.is_null() {
         return unsafe { libc::realpath(name, resolved) };
