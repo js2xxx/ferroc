@@ -146,7 +146,6 @@
 #![feature(ptr_sub_ptr)]
 #![feature(strict_provenance)]
 #![cfg_attr(feature = "c", feature(linkage))]
-#![cfg_attr(feature = "c", feature(unsafe_attributes))]
 #![cfg_attr(feature = "global", allow(internal_features))]
 #![cfg_attr(feature = "global", feature(allow_internal_unsafe))]
 #![cfg_attr(feature = "global", feature(allow_internal_unstable))]
