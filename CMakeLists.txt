@@ -84,7 +84,18 @@ if(FE_FINER_GRAINED)
     message(STATUS "Enabling finer-grained support")
 endif()
 
-set(CMAKE_CARGO_MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml)
+set(CARGO_MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml)
+set(CMAKE_CARGO_MANIFEST ${CMAKE_BINARY_DIR}/Cargo.toml)
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock DESTINATION ${CMAKE_BINARY_DIR})
+file(READ ${CARGO_MANIFEST} CARGO_MANIFEST_CONTENT)
+string(REPLACE
+    "[workspace]\nexclude = [\"target\"]\nmembers = [\"fuzz\"]\nresolver = \"2\""
+    "[lib]\ncrate-type=[\"cdylib\", \"staticlib\"]\npath=\"${CMAKE_CURRENT_SOURCE_DIR}/src/lib.rs\""
+    CARGO_MANIFEST_CONTENT
+    ${CARGO_MANIFEST_CONTENT}
+)
+file(WRITE ${CMAKE_CARGO_MANIFEST} ${CARGO_MANIFEST_CONTENT})
 
 file(GLOB_RECURSE SRC *.rs)
 set(STATIC_LIB_NAME ${CMAKE_STATIC_LIBRARY_PREFIX}ferroc${CMAKE_STATIC_LIBRARY_SUFFIX})

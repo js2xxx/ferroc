@@ -142,7 +142,6 @@
 #![feature(ptr_mask)]
 #![feature(ptr_metadata)]
 #![feature(ptr_sub_ptr)]
-#![feature(raw_os_error_ty)]
 #![feature(strict_provenance)]
 #![cfg_attr(feature = "c", feature(linkage))]
 #![cfg_attr(feature = "global", allow(internal_features))]

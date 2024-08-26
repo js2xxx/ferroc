@@ -12,9 +12,6 @@ name = "ferroc"
 repository = "https://github.com/Js2xxx/ferroc"
 version = "1.0.0-pre.2"
 
-[lib]
-crate-type = ["rlib", "cdylib", "staticlib"]
-
 [features]
 base-mmap = ["dep:memmap2", "dep:libc"]
 base-static = []
@@ -47,5 +44,6 @@ lto = true
 panic = "abort"
 
 [workspace]
+exclude = ["target"]
 members = ["fuzz"]
 resolver = "2"

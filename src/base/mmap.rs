@@ -23,7 +23,12 @@ impl Mmap {
 unsafe impl BaseAlloc for Mmap {
     const IS_ZEROED: bool = true;
 
-    type Error = std::io::RawOsError;
+    // Set as `std::io::RawOsError` so as to get rid of direct `std` dependency.
+    #[cfg(not(target_os = "uefi"))]
+    type Error = i32;
+    #[cfg(target_os = "uefi")]
+    type Error = usize;
+
     type Handle = ManuallyDrop<MmapMut>;
 
     fn allocate(&self, layout: Layout, commit: bool) -> Result<Chunk<Self>, Self::Error> {
@@ -67,7 +72,7 @@ unsafe impl BaseAlloc for Mmap {
         // SAFETY: The corresponding memory area is going to be used.
         match unsafe { libc::madvise(ptr.as_ptr().cast(), len, libc::MADV_WILLNEED) } {
             0 => Ok(()),
-            _ => Err(std::io::Error::last_os_error().raw_os_error().unwrap()),
+            _ => Err(unsafe { *libc::__errno_location() }),
         }
     }
 
