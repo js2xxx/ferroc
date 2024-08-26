@@ -115,7 +115,7 @@ if(CMAKE_BUILD_TYPE MATCHES ".*Deb.*")
 endif()
 
 if(NOT FE_PGO_GATHER)
-    set(BUILD_STD_FEATURES compiler-builtins-mem,compiler-builtins-weak-intrinsics)
+    set(BUILD_STD_FEATURES compiler-builtins-mem)
     if(CMAKE_BUILD_TYPE MATCHES ".*Rel.*")
         set(BUILD_STD_FEATURES ${BUILD_STD_FEATURES},panic_immediate_abort)
     endif()
@@ -166,7 +166,7 @@ add_custom_command(
         -E env RUSTFLAGS=${RUSTFLAGS}
         ${CARGO} +nightly build ${BUILD_FLAGS} --features c-override --target ${TRIPLE}
             --manifest-path ${CMAKE_CARGO_MANIFEST} --target-dir ${CMAKE_BINARY_DIR}
-            --out-dir ${CMAKE_BINARY_DIR} -Zunstable-options
+            --artifact-dir ${CMAKE_BINARY_DIR} -Zunstable-options
     DEPENDS ${SRC} ${SRC_PROFDATA}
     COMMENT "Building static & shared libraries of ferroc"
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
