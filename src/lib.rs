@@ -16,6 +16,8 @@ extern crate alloc;
 
 pub mod arena;
 pub mod base;
+#[cfg(feature = "c")]
+mod c;
 #[cfg(feature = "global")]
 #[cfg_attr(feature = "base-mmap", path = "global-mmap.rs")]
 mod global;
@@ -23,6 +25,7 @@ pub mod heap;
 mod slab;
 
 #[cfg(feature = "global")]
+#[allow(unused_imports)]
 pub use self::global::*;
 
 #[cfg(test)]

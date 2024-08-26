@@ -342,7 +342,7 @@ impl<B: BaseAlloc> Arenas<B> {
     /// # Safety
     ///
     /// No more aliases to the `ptr` should exist after calling this function.
-    pub unsafe fn deallocate_direct(&self, ptr: NonNull<u8>, _layout: Layout) {
+    pub unsafe fn deallocate_direct(&self, ptr: NonNull<u8>) {
         if let Some((index, _)) = self
             .arenas(true)
             .find(|(_, arena)| arena.chunk.pointer().cast() == ptr)
