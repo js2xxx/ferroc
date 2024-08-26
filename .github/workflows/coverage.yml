@@ -49,11 +49,15 @@ jobs:
             ${{ runner.os }}-fuzzing-data-
             ${{ runner.os }}-
 
-      - name: Fuzz target
+      - name: Prepare fuzzing data
         run: |
           mkdir -p fuzzing-data/artifacts && cp -r fuzzing-data/artifacts fuzz
           mkdir -p fuzzing-data/corpus && cp -r fuzzing-data/corpus fuzz
           mkdir -p fuzzing-data/coverage && cp -r fuzzing-data/coverage fuzz
+
+      - name: Fuzz target
+        id: fuzz-target
+        run: |
           cargo fuzz run stress &
           PID=$!
           sleep 60
@@ -63,9 +67,22 @@ jobs:
             -instr-profile=./fuzz/coverage/stress/coverage.profdata \
             -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/stress \
             -sources ./src | rustfilt > target/lcov.txt
+        env:
+          RUSTFLAGS: -Cdebug=true
+        continue-on-error: true
+
+      - name: Save fuzzing data
+        run: |
           cp -rf fuzz/artifacts fuzzing-data
           cp -rf fuzz/corpus fuzzing-data
           cp -rf fuzz/coverage fuzzing-data
+
+      - name: Upload failure artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: fuzzing-data
+          name: fuzzing-data
+        if: ${{ steps.fuzz-target.outcome == 'failure' }}
 
       - name: Upload coverage report
         uses: codecov/codecov-action@v4
@@ -74,3 +91,4 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: js2xxx/ferroc
+        if: ${{ steps.fuzz-target.outcome == 'success' }}
