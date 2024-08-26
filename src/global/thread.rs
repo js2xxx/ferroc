@@ -15,14 +15,14 @@ macro_rules! thread_statics {
         #[thread_local]
         static HEAP: Cell<Pin<&Heap>> = Cell::new(THREAD_LOCALS.empty_heap());
 
-        pub fn with<T>(f: impl Fn(&Heap) -> T) -> T {
+        pub fn with<T>(f: impl FnOnce(&Heap) -> T) -> T {
             f(&HEAP.get())
         }
 
         #[inline(always)]
-        pub fn with_lazy<T, F>(f: F) -> T
+        pub fn with_lazy<'a, T, F>(f: F) -> T
         where
-            F: FnOnce(&'static Heap, fn() -> &'static Heap<'static, 'static>) -> T,
+            F: FnOnce(&'a Heap, fn() -> &'a Heap<'static, 'static>) -> T,
         {
             fn fallback<'a>() -> &'a Heap<'static, 'static> {
                 let (heap, id) = Pin::static_ref(&THREAD_LOCALS).assign();

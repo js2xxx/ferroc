@@ -908,11 +908,8 @@ unsafe impl<'arena: 'cx, 'cx, B: BaseAlloc> Allocator for Heap<'arena, 'cx, B> {
 /// [`allocate_with`](Heap::allocate_with).
 #[derive(Clone, Copy)]
 pub struct AllocateOptions<F, E> {
-    /// The lazyily evaluated backup heap when the current heap is not
-    /// initialized (fails to acquire memory from its context).
-    pub fallback: F,
-    /// Receives a concrete error when the allocation fails.
-    pub error_sink: E,
+    fallback: F,
+    error_sink: E,
 }
 
 impl<F, E> AllocateOptions<F, E> {
@@ -922,6 +919,9 @@ impl<F, E> AllocateOptions<F, E> {
     }
 
     /// Replace with a new fallback.
+    ///
+    /// The fallback returns lazyily evaluated backup heap when the current heap
+    /// is not initialized (fails to acquire memory from its context).
     pub fn fallback<F2>(self, fallback: F2) -> AllocateOptions<F2, E> {
         AllocateOptions {
             fallback,
@@ -930,6 +930,8 @@ impl<F, E> AllocateOptions<F, E> {
     }
 
     /// Replace with a new error sink.
+    ///
+    /// The error sink receives a concrete error when the allocation fails.
     pub fn error_sink<E2>(self, error_sink: E2) -> AllocateOptions<F, E2> {
         AllocateOptions {
             fallback: self.fallback,

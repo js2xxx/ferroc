@@ -1,5 +1,5 @@
 use core::{
-    alloc::Layout,
+    alloc::{Allocator, Layout},
     ffi::{c_char, c_int, c_void},
     ptr::{self, NonNull},
 };
@@ -25,7 +25,7 @@ pub unsafe extern "C" fn fe_posix_memalign(
     if slot.is_null() {
         return libc::EINVAL;
     }
-    if let Ok(ptr) = Ferroc.allocate(layout) {
+    if let Ok(ptr) = Allocator::allocate(&Ferroc, layout) {
         slot.write(ptr.as_ptr().cast());
         return 0;
     }
@@ -37,9 +37,7 @@ pub extern "C" fn fe_aligned_alloc(align: usize, size: usize) -> *mut c_void {
     let Ok(layout) = Layout::from_size_align(size, align) else {
         return ptr::null_mut();
     };
-    Ferroc
-        .allocate(layout)
-        .map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
+    Allocator::allocate(&Ferroc, layout).map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
 }
 
 #[no_mangle]
@@ -47,9 +45,7 @@ pub extern "C" fn fe_memalign(align: usize, size: usize) -> *mut c_void {
     let Ok(layout) = Layout::from_size_align(size, align) else {
         return ptr::null_mut();
     };
-    Ferroc
-        .allocate(layout)
-        .map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
+    Allocator::allocate(&Ferroc, layout).map_or(ptr::null_mut(), |ptr| ptr.as_ptr().cast())
 }
 
 #[no_mangle]
