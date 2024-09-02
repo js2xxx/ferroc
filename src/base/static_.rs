@@ -67,7 +67,7 @@ impl<const HEADER_CAP: usize> Static<HEADER_CAP> {
         }
     }
 
-    fn alloc_inner(&'static self, layout: Layout) -> Option<Chunk<&Self>> {
+    fn alloc_inner(&'static self, layout: Layout) -> Option<Chunk<&'static Self>> {
         let layout = layout.align_to(mem::align_of::<usize>()).ok()?;
         let base = self.memory.get().cast();
         let mut top = match self
