@@ -12,10 +12,9 @@ use super::{BaseAlloc, Chunk, StaticHandle};
 ///
 /// By using a [`Static`] allocator, users can
 /// [`manage`](crate::arena::Arenas::manage) external static memory other than
-/// allocating from this allocator alone. However, `HEADER_CAP` must
-/// be set carefully because arena headers need to be allocated from this
-/// structure. As a reminder, 1 bit in an arena header manages a memory block of
-/// `SLAB_SIZE`.
+/// allocating from this allocator alone. However, `HEADER_CAP` must be set
+/// carefully because arena headers need to be allocated from this structure. As
+/// a reminder, 1 bit in an arena header manages a memory block of `SLAB_SIZE`.
 ///
 /// # Examples
 ///

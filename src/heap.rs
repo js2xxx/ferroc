@@ -21,8 +21,9 @@ use array_macro::array;
 #[cfg(feature = "global")]
 pub use self::thread_local::{ThreadData, ThreadLocal};
 use crate::{
-    arena::{Arenas, Error, SHARD_SIZE, SLAB_SIZE},
+    arena::{Arenas, Error},
     base::BaseAlloc,
+    config::{SHARD_SIZE, SLAB_SIZE},
     slab::{AtomicBlockRef, BlockRef, Shard, ShardList, Slab, EMPTY_SHARD},
     track,
 };

@@ -17,16 +17,12 @@ use core::{
 use self::bitmap::Bitmap;
 use crate::{
     base::{BaseAlloc, Chunk},
+    config::{SLAB_SHIFT, SLAB_SIZE},
     heap::ObjSizeType,
     slab::{Slab, SlabRef, SlabSource},
 };
 
 const BYTE_WIDTH: usize = u8::BITS as usize;
-
-/// The minimal alignment required for [`Chunk`]s, in bits.
-pub const SLAB_SHIFT: u32 = 2 + 10 + 10;
-/// The minimal alignment required for [`Chunk`]s.
-pub const SLAB_SIZE: usize = 1 << SLAB_SHIFT;
 
 pub(crate) const fn slab_layout(n: usize) -> Layout {
     match Layout::from_size_align(n << SLAB_SHIFT, SLAB_SIZE) {
@@ -34,11 +30,6 @@ pub(crate) const fn slab_layout(n: usize) -> Layout {
         Err(_) => panic!("invalid slab layout"),
     }
 }
-
-pub(crate) const SHARD_SHIFT: u32 = 6 + 10;
-pub(crate) const SHARD_SIZE: usize = 1 << SHARD_SHIFT;
-
-pub(crate) const SHARD_COUNT: usize = SLAB_SIZE / SHARD_SIZE;
 
 struct Arena<B: BaseAlloc> {
     arena_id: NonZeroUsize,

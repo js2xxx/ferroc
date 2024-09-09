@@ -84,7 +84,16 @@ fn main() {
 - `"track-valgrind"`: Valgrind memory tracking support based on [`crabgrind`](https://github.com/2dav/crabgrind), which requires Valgrind's version of at least 3.22;
 - `"finer-grained"`: Add more object size types to small bins, decreasing fragmentation but also the minimal alignment from 16 to 8, potentially leading some programs that need SIMD to fail for misalignment.
 
-## Building process for C/C++ users
+## Environment variables
+
+There are several additional configurations that can be set via environment variables to control the behavior of Ferroc:
+
+- `FE_SLAB_SHIFT`: Set the slab size (in bits) for all the data structures, a.k.a. the minimal allocation unit of arenas. Default is 22.
+- `FE_SHARD_SHIFT`: Set the shard size (in bits) for all the data structures, a.k.a. the minimal allocation unit of slabs. Default is 16.
+
+Those configurations are not exported as cargo features due to the requirement of additiveness.
+
+## Building process for CMake users
 
 1. Download and install the latest nightly Rust toolchain:
 
@@ -114,6 +123,8 @@ There are also some custom options (via `cmake -D`) you can enable:
 - `FE_FINER_GRAINED`: See [`"finer-grained"`](#cargo-features) above.
 - `FE_PGO_GATHER`: Enable PGO (Profile-Guided Optimization) gathering.
 - `FE_PGO_USE`: Build with optimization from pre-gathered PGO data (which requires appending ` llvm-tools` to the second line of step 1).
+
+Additionally, environment variables (see [the section above](#environment-variables)) can also be used to control the build.
 
 ## Benchmarks
 

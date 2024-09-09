@@ -13,7 +13,7 @@ use core::{alloc::Layout, ptr::NonNull};
 pub use self::mmap::Mmap;
 #[cfg(feature = "base-static")]
 pub use self::static_::Static;
-use crate::arena::SLAB_SIZE;
+use crate::config::SLAB_SIZE;
 
 /// A static memory handle, unable to be deallocated any longer.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

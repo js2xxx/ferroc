@@ -182,6 +182,22 @@ mod slab;
 #[doc(hidden)]
 pub mod track;
 
+/// Configured constants for all the data structures.
+pub mod config {
+    include!(concat!(env!("OUT_DIR"), "/config.rs"));
+
+    /// The minimal allocation unit of arenas; the minimal alignment required
+    /// for [`Chunk`](crate::base::Chunk)s.
+    pub const SLAB_SIZE: usize = 1 << SLAB_SHIFT;
+
+    /// The minimal allocation unit of slabs.
+    pub const SHARD_SIZE: usize = 1 << SHARD_SHIFT;
+
+    /// The number of shards in a slab.
+    pub const SHARD_COUNT: usize = SLAB_SIZE / SHARD_SIZE;
+    static_assertions::const_assert!(SHARD_COUNT > 1);
+}
+
 #[cfg(feature = "default")]
 config_mod!(global_mmap: pub crate::base::Mmap: pthread);
 
@@ -194,8 +210,9 @@ mod test {
     use std::{thread, vec::Vec};
 
     use crate::{
-        arena::{slab_layout, Arenas, SHARD_SIZE, SLAB_SIZE},
+        arena::{slab_layout, Arenas},
         base::{BaseAlloc, Mmap},
+        config::{SHARD_SIZE, SLAB_SIZE},
         heap::{Context, Heap},
         Ferroc,
     };

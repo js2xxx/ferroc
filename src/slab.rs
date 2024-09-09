@@ -17,8 +17,9 @@ use core::{
 pub(crate) use self::block::{AtomicBlockRef, BlockRef};
 use self::cell_link::{CellLink, CellLinked, CellList};
 use crate::{
-    arena::{Error, SHARD_COUNT, SHARD_SIZE, SLAB_SIZE},
+    arena::Error,
     base::{BaseAlloc, Chunk},
+    config::{SHARD_COUNT, SHARD_SIZE, SLAB_SIZE},
     heap::ObjSizeType,
 };
 
@@ -174,6 +175,7 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
         let header_count =
             mem::size_of_val(unsafe { ptr.cast::<Self>().as_uninit_ref() }).div_ceil(SHARD_SIZE);
         assert_eq!(header_count, Self::HEADER_COUNT);
+        debug_assert!(Self::HEADER_COUNT < SHARD_COUNT);
 
         // SAFETY: `ptr` is fresh allocated and unique.
         unsafe {
