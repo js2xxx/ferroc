@@ -195,7 +195,7 @@ pub mod config {
 
     /// The number of shards in a slab.
     pub const SHARD_COUNT: usize = SLAB_SIZE / SHARD_SIZE;
-    static_assertions::const_assert!(SHARD_COUNT > 1);
+    const _: () = assert!(SHARD_COUNT > 1, "A slab must have at least two shards");
 }
 
 #[cfg(feature = "default")]
