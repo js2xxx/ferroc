@@ -21,7 +21,7 @@ fn load_memory() {
 
     let pointer = unsafe { NonNull::new_unchecked(STATIC_MEM.0.get().cast()) };
     let chunk = unsafe { Chunk::from_static(pointer, Layout::new::<Memory>()) };
-    CUSTOM.manage(chunk).unwrap();
+    Custom.manage(chunk).unwrap();
 }
 
 fn main() {
