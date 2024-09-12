@@ -28,7 +28,7 @@ pub struct StaticHandle;
 /// usually page-aligned.
 ///
 /// The default implementations of `BaseAlloc` in this crate are [`Mmap`] backed
-/// by [a Rust mmap interface](https://github.com/darfink/region-rs), and
+/// by [a Rust mmap interface](https://crates.io/crates/memmap2), and
 /// [`Static`] backed by manual & static memory allocations.
 ///
 /// # Safety
@@ -95,7 +95,14 @@ pub unsafe trait BaseAlloc: Sized {
 /// A marker trait depends on what features enabled:
 ///
 /// - `error-log`: [`core::fmt::Display`];
+#[cfg(not(feature = "error-log"))]
 pub trait BaseError {}
+
+/// A marker trait depends on what features enabled:
+///
+/// - `error-log`: [`core::fmt::Display`];
+#[cfg(feature = "error-log")]
+pub trait BaseError: core::fmt::Display {}
 
 #[cfg(not(feature = "error-log"))]
 impl<T> BaseError for T {}

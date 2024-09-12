@@ -247,7 +247,7 @@ pub struct Heap<'arena, 'cx, B: BaseAlloc> {
 
 fn log_error<B: BaseAlloc>(err: Error<B>) {
     #[cfg(feature = "error-log")]
-    log::error!("ferroc: {err:?}");
+    log::error!("ferroc: {err}");
     #[cfg(not(feature = "error-log"))]
     let _ = err;
 }

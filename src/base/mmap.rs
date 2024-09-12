@@ -4,7 +4,7 @@ use memmap2::MmapMut;
 
 use super::{BaseAlloc, Chunk};
 
-/// A base allocator backed by `mmap` function series.
+/// A base allocator backed by [a Rust mmap interface](https://crates.io/crates/memmap2).
 #[derive(Debug, Clone, Copy, Default, Hash)]
 pub struct Mmap;
 
@@ -72,7 +72,7 @@ unsafe impl BaseAlloc for Mmap {
     unsafe fn commit(&self, ptr: NonNull<[u8]>) -> Result<(), Self::Error> {
         let (ptr, len) = ptr.to_raw_parts();
         // SAFETY: The corresponding memory area is going to be used.
-        match unsafe { libc::madvise(ptr.as_ptr().cast(), len, libc::MADV_WILLNEED) } {
+        match unsafe { libc::madvise(ptr.as_ptr().cast(), len, libc::MADV_WILLNEED | libc::MADV_HUGEPAGE) } {
             0 => Ok(()),
             _ => Err(errno()),
         }

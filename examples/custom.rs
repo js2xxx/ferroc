@@ -28,4 +28,5 @@ fn main() {
     let mut vec = vec![];
     vec.extend([1, 2, 3, 4, 5]);
     assert_eq!(vec.iter().sum::<i32>(), 15);
+    println!("{vec:?}");
 }

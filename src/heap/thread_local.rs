@@ -83,8 +83,16 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
         let (layout, _) = layout
             .repeat(bi.bucket_count)
             .expect("layout calculation failed: too many bucket requests");
-        let Ok(chunk) = arenas.base().allocate(layout, true) else {
-            unreachable!("allocation for thread-local failed: too many bucket requests")
+        let chunk = match arenas.base().allocate(layout, true) {
+            Ok(chunk) => chunk,
+            Err(_err) => {
+                #[cfg(feature = "error-log")]
+                unreachable!(
+                    "allocation for thread-local failed: too many bucket requests: {_err}"
+                );
+                #[cfg(not(feature = "error-log"))]
+                unreachable!("allocation for thread-local failed: too many bucket requests")
+            }
         };
         let mut bucket = chunk.pointer().cast::<Entry<'arena, B>>();
         for _ in 0..bi.bucket_count {
