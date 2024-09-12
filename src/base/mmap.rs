@@ -71,14 +71,12 @@ unsafe impl BaseAlloc for Mmap {
     #[cfg(all(unix, not(miri)))]
     unsafe fn commit(&self, ptr: NonNull<[u8]>) -> Result<(), Self::Error> {
         let (ptr, len) = ptr.to_raw_parts();
+        #[cfg(not(target_os = "macos"))]
+        let flags = libc::MADV_WILLNEED | libc::MADV_HUGEPAGE;
+        #[cfg(target_os = "macos")]
+        let flags = libc::MADV_WILLNEED;
         // SAFETY: The corresponding memory area is going to be used.
-        match unsafe {
-            libc::madvise(
-                ptr.as_ptr().cast(),
-                len,
-                libc::MADV_WILLNEED | libc::MADV_HUGEPAGE,
-            )
-        } {
+        match unsafe { libc::madvise(ptr.as_ptr().cast(), len, flags) } {
             0 => Ok(()),
             _ => Err(errno()),
         }
