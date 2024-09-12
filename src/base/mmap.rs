@@ -72,7 +72,13 @@ unsafe impl BaseAlloc for Mmap {
     unsafe fn commit(&self, ptr: NonNull<[u8]>) -> Result<(), Self::Error> {
         let (ptr, len) = ptr.to_raw_parts();
         // SAFETY: The corresponding memory area is going to be used.
-        match unsafe { libc::madvise(ptr.as_ptr().cast(), len, libc::MADV_WILLNEED | libc::MADV_HUGEPAGE) } {
+        match unsafe {
+            libc::madvise(
+                ptr.as_ptr().cast(),
+                len,
+                libc::MADV_WILLNEED | libc::MADV_HUGEPAGE,
+            )
+        } {
             0 => Ok(()),
             _ => Err(errno()),
         }
