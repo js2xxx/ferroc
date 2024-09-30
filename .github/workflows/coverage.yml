@@ -9,11 +9,6 @@ on:
 jobs:
   coverage:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        fuzzing-target: ["stress", "custom"]
-
     steps:
       - uses: actions/checkout@v4
 
@@ -58,22 +53,36 @@ jobs:
           mkdir -p fuzzing-data/artifacts && cp -r fuzzing-data/artifacts fuzz
           mkdir -p fuzzing-data/corpus && cp -r fuzzing-data/corpus fuzz
           mkdir -p fuzzing-data/coverage && cp -r fuzzing-data/coverage fuzz
+          touch target/lcov.txt
 
-      - name: Fuzz target
-        id: fuzz-target
+      - name: Fuzz target (stress)
+        id: fuzz-target-stress
         run: |
-          cargo fuzz run ${{ matrix.fuzzing-target }} &
+          cargo fuzz run stress &
           PID=$!
           sleep 60
           k(){ if c=$(pgrep -P $1);then for p in $c;do k $p;done;fi;kill $1; }; k $PID
-          cargo fuzz coverage ${{ matrix.fuzzing-target }}
+          cargo fuzz coverage stress
           cargo cov -- export -format=lcov \
-            -instr-profile=./fuzz/coverage/${{ matrix.fuzzing-target }}/coverage.profdata \
-            -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/${{ matrix.fuzzing-target }} \
-            -sources ./src | rustfilt > target/lcov.txt
+            -instr-profile=./fuzz/coverage/stress/coverage.profdata \
+            -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/stress \
+            -sources ./src | rustfilt >> target/lcov.txt
         env:
           RUSTFLAGS: -Cdebuginfo=2
         continue-on-error: true
+
+      - name: Fuzz target (custom)
+        id: fuzz-target-custom
+        run: |
+          cargo fuzz run custom &
+          PID=$!
+          sleep 60
+          k(){ if c=$(pgrep -P $1);then for p in $c;do k $p;done;fi;kill $1; }; k $PID
+          cargo fuzz coverage custom
+          cargo cov -- export -format=lcov \
+            -instr-profile=./fuzz/coverage/custom/coverage.profdata \
+            -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/custom \
+            -sources ./src | rustfilt >> target/lcov.txt
 
       - name: Save fuzzing data
         run: |
@@ -86,7 +95,7 @@ jobs:
         with:
           path: fuzzing-data
           name: fuzzing-data
-        if: ${{ steps.fuzz-target.outcome == 'failure' }}
+        if: ${{ steps.fuzz-target-stress.outcome == 'failure' || steps.fuzz-target-custom.outcome == 'failure'}}
 
       - name: Upload coverage report
         uses: codecov/codecov-action@v4
@@ -95,4 +104,4 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: js2xxx/ferroc
-        if: ${{ steps.fuzz-target.outcome == 'success' }}
+        if: ${{ steps.fuzz-target-stress.outcome == 'success' && steps.fuzz-target-custom.outcome == 'success' }}
