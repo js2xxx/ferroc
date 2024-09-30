@@ -361,13 +361,11 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
         if zero {
             if shard.free_is_zero() {
-                debug_assert!(
-                    ptr_slice.is_empty() || unsafe { ptr_slice.as_ref().iter().any(|&b| b == 0) }
-                );
                 block.set_next(None);
             } else {
                 unsafe { ptr_slice.as_uninit_slice_mut().fill(MaybeUninit::zeroed()) };
             }
+            debug_assert!(unsafe { ptr_slice.as_ref().iter().any(|&b| b == 0) });
         }
         core::mem::forget(block);
         ptr
