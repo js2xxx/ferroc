@@ -378,7 +378,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         &'a self,
         size: usize,
         zero: bool,
-        fallback: impl FnOnce() -> &'a Self,
+        fallback: impl FnOnce() -> Option<&'a Self>,
     ) -> Option<NonNull<()>> {
         if size <= ObjSizeType::SMALL_MAX
             && let direct_index = direct_index(size)
@@ -389,7 +389,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             return Some(Self::post_alloc(block, size, zero, shard));
         }
 
-        let heap = if self.is_init() { self } else { fallback() };
+        let heap = if self.is_init() { self } else { fallback()? };
         debug_assert!(heap.is_init());
         // SAFETY: Heap is initialized.
         unsafe { heap.pop_contended(size, zero) }
@@ -508,7 +508,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         &'a self,
         layout: Layout,
         zero: bool,
-        fallback: impl FnOnce() -> &'a Self,
+        fallback: impl FnOnce() -> Option<&'a Self>,
     ) -> Option<NonNull<()>> {
         if layout.size() <= ObjSizeType::SMALL_MAX
             && let direct_index = direct_index(layout.size())
@@ -531,7 +531,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         &'a self,
         layout: Layout,
         zero: bool,
-        fallback: impl FnOnce() -> &'a Self,
+        fallback: impl FnOnce() -> Option<&'a Self>,
     ) -> Option<NonNull<()>> {
         if layout.align() <= ObjSizeType::LARGE_MAX {
             let oversize = layout.size() + layout.align() - 1;
@@ -563,7 +563,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         &'a self,
         layout: Layout,
         zero: bool,
-        fallback: impl FnOnce() -> &'a Self,
+        fallback: impl FnOnce() -> Option<&'a Self>,
     ) -> Option<NonNull<()>> {
         if layout.size() == 0 {
             return Some(layout.dangling().cast());
@@ -584,10 +584,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
     /// The default heap fallback will panic, while the default error sink will
     /// silently drop the error.
     #[allow(clippy::type_complexity)]
-    pub fn options<'a>() -> AllocateOptions<fn() -> &'a Self> {
-        AllocateOptions {
-            fallback: || unreachable!("uninitialized heap"),
-        }
+    pub fn options<'a>() -> AllocateOptions<fn() -> Option<&'a Self>> {
+        AllocateOptions { fallback: || None }
     }
 
     /// Allocate a memory block of `layout` with additional options.
@@ -600,7 +598,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         options: AllocateOptions<F>,
     ) -> Result<NonNull<()>, AllocError>
     where
-        F: FnOnce() -> &'a Self,
+        F: FnOnce() -> Option<&'a Self>,
     {
         // SAFETY: `fallback` returns an initialized heap, according to the
         // functionality of `options`.
@@ -613,7 +611,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         &'a self,
         size: usize,
         zero: bool,
-        fallback: impl FnOnce() -> &'a Self,
+        fallback: impl FnOnce() -> Option<&'a Self>,
     ) -> Option<NonNull<()>> {
         unsafe { self.pop(size, zero, fallback) }
     }

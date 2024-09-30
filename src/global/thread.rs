@@ -6,6 +6,7 @@ pub use libc::{pthread_key_create, pthread_key_delete, pthread_setspecific};
 #[doc(hidden)]
 #[allow_internal_unsafe]
 #[allow_internal_unstable(thread_local)]
+#[allow_internal_unstable(const_pin)]
 macro_rules! thread_statics {
     () => {
         use core::{cell::Cell, pin::Pin, ptr};
@@ -13,7 +14,8 @@ macro_rules! thread_statics {
         use super::{Heap, THREAD_LOCALS};
 
         #[thread_local]
-        static HEAP: Cell<Pin<&Heap<'_, '_>>> = Cell::new(THREAD_LOCALS.empty_heap());
+        static HEAP: Cell<Pin<&Heap<'_, '_>>> =
+            Cell::new(Pin::static_ref(&THREAD_LOCALS).empty_heap());
 
         #[inline(always)]
         pub fn with<T>(f: impl FnOnce(&Heap<'_, '_>) -> T) -> T {
@@ -23,14 +25,14 @@ macro_rules! thread_statics {
         #[inline(always)]
         pub fn with_lazy<T, F>(f: F) -> T
         where
-            F: for<'a, 'h> FnOnce(&'a Heap<'h, 'h>, fn() -> &'a Heap<'h, 'h>) -> T,
+            F: for<'a, 'h> FnOnce(&'a Heap<'h, 'h>, fn() -> Option<&'a Heap<'h, 'h>>) -> T,
         {
-            fn fallback<'a>() -> &'a Heap<'static, 'static> {
-                let (heap, id) = Pin::static_ref(&THREAD_LOCALS).assign();
+            fn fallback<'a>() -> Option<&'a Heap<'static, 'static>> {
+                let (heap, id) = Pin::static_ref(&THREAD_LOCALS).assign()?;
                 // SAFETY: `init` is called only once for every thread-local heap.
                 unsafe { init(id) };
                 HEAP.set(heap);
-                Pin::get_ref(heap)
+                Some(Pin::get_ref(heap))
             }
 
             f(Pin::get_ref(HEAP.get()), fallback)
@@ -53,7 +55,7 @@ macro_rules! thread_init_pthread {
             /// - `id` must be a valid thread-local heap ID;
             /// - the thread-local heap must not be used after calling this function.
             unsafe extern "C" fn fini(id: *mut core::ffi::c_void) {
-                HEAP.set(THREAD_LOCALS.empty_heap());
+                HEAP.set(core::pin::Pin::static_ref(&THREAD_LOCALS).empty_heap());
                 let id = id.addr().try_into().unwrap();
                 // SAFETY: `id` is valid; the thread-local heap is no longer used.
                 unsafe { Pin::static_ref(&THREAD_LOCALS).put(id) };

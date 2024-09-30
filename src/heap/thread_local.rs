@@ -2,7 +2,7 @@
 // use core::num::NonZeroUsize;
 use core::{
     alloc::{AllocError, Allocator, Layout},
-    cell::UnsafeCell,
+    cell::{Cell, UnsafeCell},
     marker::PhantomPinned,
     mem::{ManuallyDrop, MaybeUninit},
     num::NonZeroU64,
@@ -78,7 +78,7 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
     #[allow(clippy::declare_interior_mutable_const)]
     const NEW: Self = Bucket::new();
 
-    fn allocate(bi: BucketIndex, arenas: &'arena Arenas<B>) -> Chunk<B> {
+    fn allocate(bi: BucketIndex, arenas: &'arena Arenas<B>) -> Option<Chunk<B>> {
         let layout = Layout::new::<Entry<'arena, B>>();
         let (layout, _) = layout
             .repeat(bi.bucket_count)
@@ -87,11 +87,8 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
             Ok(chunk) => chunk,
             Err(_err) => {
                 #[cfg(feature = "error-log")]
-                unreachable!(
-                    "allocation for thread-local failed: too many bucket requests: {_err}"
-                );
-                #[cfg(not(feature = "error-log"))]
-                unreachable!("allocation for thread-local failed: too many bucket requests")
+                log::error!("allocation for thread-local failed: too many bucket requests: {_err}");
+                return None;
             }
         };
         let mut bucket = chunk.pointer().cast::<Entry<'arena, B>>();
@@ -110,7 +107,7 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
                 bucket = bucket.add(1);
             }
         }
-        chunk
+        Some(chunk)
     }
 
     /// # Safety
@@ -182,8 +179,13 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     ///
     /// This method is safe because uninitialized heaps don't mutate their inner
     /// data at all, thus practically `Sync`.
-    pub const fn empty_heap(&'static self) -> Pin<&'static Heap<'static, 'static, B>> {
-        Pin::static_ref(&self.empty_heap)
+    pub const fn empty_heap<'a>(self: Pin<&'a Self>) -> Pin<&'a Heap<'arena, 'a, B>> {
+        // SAFETY: The empty heap is immutable.
+        unsafe {
+            let pointer = Pin::into_inner_unchecked(self);
+            let new_pointer = &pointer.empty_heap;
+            Pin::new_unchecked(new_pointer)
+        }
     }
 }
 
@@ -207,6 +209,12 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
 
     /// Acquires a new thread id and initialize its associated heap.
     ///
+    /// # Invariants
+    ///
+    /// - The returned id is guaranteed to be unique with each live thread
+    ///   regarding only this structure and may or may not be recycled.
+    /// - The returned heap is initialized.
+    ///
     /// # Examples
     ///
     /// Users can Store the information in its thread-local variable in 2 ways:
@@ -221,7 +229,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     /// # Panics
     ///
     /// Panics if the acquisition failed.
-    pub fn assign(self: Pin<&Self>) -> (Pin<&Heap<'arena, '_, B>>, u64) {
+    pub fn assign(self: Pin<&Self>) -> Option<(Pin<&Heap<'arena, '_, B>>, u64)> {
         // SAFETY: `id` is used to initialize its thread data entry below immediately.
         let id = unsafe { self.acquire_id() };
         let heap = match NonZeroU64::new(id) {
@@ -245,16 +253,13 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
                 // another dead thread, which means its thread data entry can be already
                 // initialized and should not be `insert`ed unconditionally.
                 unsafe {
-                    self.map_unchecked(|this| {
-                        if let Some(heap) = this.get_inner(bi) {
-                            return heap;
-                        }
-                        this.insert(bi)
-                    })
+                    let this = Pin::into_inner_unchecked(self);
+                    let heap = this.get_inner(bi).or_else(move || this.insert(bi))?;
+                    Pin::new_unchecked(heap)
                 }
             }
         };
-        (heap, id)
+        Some((heap, id))
     }
 
     /// # Safety
@@ -346,12 +351,12 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     }
 
     #[cold]
-    unsafe fn insert(&self, bi: BucketIndex) -> &Heap<'arena, 'arena, B> {
+    unsafe fn insert(&self, bi: BucketIndex) -> Option<&Heap<'arena, 'arena, B>> {
         let bucket_slot = unsafe { self.bucket_slot(bi) };
         let bucket = bucket_slot.pointer.load(Acquire);
 
         let bucket = if bucket.is_null() {
-            let chunk = Bucket::allocate(bi, self.arena);
+            let chunk = Bucket::allocate(bi, self.arena)?;
             let new_bucket = chunk.pointer().cast();
 
             match bucket_slot.pointer.compare_exchange(
@@ -369,7 +374,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
         } else {
             bucket
         };
-        unsafe { &(*bucket.add(bi.index)).heap }
+        Some(unsafe { &(*bucket.add(bi.index)).heap })
     }
 }
 
@@ -451,22 +456,34 @@ impl<'arena, B: BaseAlloc> Drop for ThreadLocal<'arena, B> {
 /// macros instead.
 pub struct ThreadData<'t, 'arena, B: BaseAlloc> {
     thread_local: Pin<&'t ThreadLocal<'arena, B>>,
-    heap: Pin<&'t Heap<'arena, 't, B>>,
-    id: u64,
+    heap: Cell<Pin<&'t Heap<'arena, 't, B>>>,
+    id: Cell<Option<u64>>,
 }
 
 impl<'t, 'arena: 't, B: BaseAlloc> ThreadData<'t, 'arena, B> {
     /// Creates a new thread-local heap.
-    pub fn new(thread_local: Pin<&'t ThreadLocal<'arena, B>>) -> Self {
-        let (heap, id) = thread_local.assign();
-        ThreadData { thread_local, heap, id }
+    pub const fn new(thread_local: Pin<&'t ThreadLocal<'arena, B>>) -> Self {
+        ThreadData {
+            thread_local,
+            heap: Cell::new(thread_local.empty_heap()),
+            id: Cell::new(None),
+        }
+    }
+
+    fn init_heap(&self) -> Option<&'t Heap<'arena, 't, B>> {
+        let (heap, id) = self.thread_local.assign()?;
+        self.heap.set(heap);
+        self.id.set(Some(id));
+        Some(Pin::get_ref(heap))
     }
 
     /// Allocate a block of memory from the current thread-local heap.
     ///
     /// See [`Heap::allocate`] for more information.
     pub fn allocate(&self, layout: Layout) -> Result<NonNull<()>, AllocError> {
-        self.heap.allocate(layout)
+        self.heap.get().allocate_with(layout, false, unsafe {
+            super::AllocateOptions::new(|| self.init_heap())
+        })
     }
 
     /// Allocate a block of memory from the current thread-local heap, and zero
@@ -474,7 +491,9 @@ impl<'t, 'arena: 't, B: BaseAlloc> ThreadData<'t, 'arena, B> {
     ///
     /// See [`Heap::allocate_zeroed`] for more information.
     pub fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<()>, AllocError> {
-        self.heap.allocate_zeroed(layout)
+        self.heap.get().allocate_with(layout, true, unsafe {
+            super::AllocateOptions::new(|| self.init_heap())
+        })
     }
 
     /// Get the layout of a block of memory from the current thread-local heap.
@@ -483,7 +502,8 @@ impl<'t, 'arena: 't, B: BaseAlloc> ThreadData<'t, 'arena, B> {
     ///
     /// See [`Heap::layout_of`] for more information.
     pub unsafe fn layout_of(&self, ptr: NonNull<u8>) -> Layout {
-        unsafe { self.heap.layout_of(ptr) }
+        // SAFETY: The pointer is valid .
+        unsafe { self.heap.get().layout_of(ptr) }
     }
 
     /// Deallocate a block of memory to the current thread-local heap.
@@ -493,7 +513,7 @@ impl<'t, 'arena: 't, B: BaseAlloc> ThreadData<'t, 'arena, B> {
     /// See [`Heap::deallocate`] for more information.
     pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         // SAFETY: The pointer is valid for `layout`.
-        unsafe { self.heap.deallocate(ptr, layout) }
+        unsafe { self.heap.get().deallocate(ptr, layout) }
     }
 }
 
@@ -501,25 +521,28 @@ impl<'t, 'arena: 't, B: BaseAlloc> Deref for ThreadData<'t, 'arena, B> {
     type Target = Heap<'arena, 't, B>;
 
     fn deref(&self) -> &Self::Target {
-        &self.heap
+        Pin::get_ref(self.heap.get())
     }
 }
 
 unsafe impl<'t, 'arena: 't, B: BaseAlloc> Allocator for ThreadData<'t, 'arena, B> {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        Allocator::allocate(&**self, layout)
+        self.allocate(layout)
+            .map(|ptr| NonNull::slice_from_raw_parts(ptr.cast(), layout.size()))
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        unsafe { Allocator::deallocate(&**self, ptr, layout) }
+        unsafe { self.deallocate(ptr, layout) };
     }
 }
 
 impl<'t, 'arena: 't, B: BaseAlloc> Drop for ThreadData<'t, 'arena, B> {
     fn drop(&mut self) {
-        // SAFETY: `id` is previously allocated from `thread_local`, and `heap` is not
-        // used any longer.
-        unsafe { self.thread_local.put(self.id) }
+        if let Some(id) = self.id.take() {
+            // SAFETY: `id` is previously allocated from `thread_local`, and `heap` is not
+            // used any longer.
+            unsafe { self.thread_local.put(id) }
+        }
     }
 }
 
@@ -568,5 +591,24 @@ mod tests {
                 index: 1,
             }
         );
+    }
+
+    #[test]
+    fn test_thread_data() {
+        use core::pin::pin;
+
+        use crate::{
+            arena::Arenas,
+            base::Mmap,
+            heap::{ThreadData, ThreadLocal},
+        };
+
+        let arenas = Arenas::new(Mmap);
+        let thread_local = pin!(ThreadLocal::new(&arenas));
+        let thread_data = ThreadData::new(thread_local.as_ref());
+
+        let mut vec = std::vec::Vec::with_capacity_in(5, &thread_data);
+        vec.extend([1, 2, 3, 4, 5]);
+        assert_eq!(vec.iter().sum::<i32>(), 15);
     }
 }
