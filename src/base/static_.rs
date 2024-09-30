@@ -36,21 +36,21 @@ use super::{BaseAlloc, Chunk, StaticHandle};
 /// let heap = Heap::new(cx.as_ref());
 /// ```
 #[derive(Debug)]
-pub struct Static<const HEADER_CAP: usize> {
+pub struct Static<const HEADER_CAP: usize, const FREE_IS_ZERO: bool = false> {
     memory: UnsafeCell<[usize; HEADER_CAP]>,
     top: AtomicPtr<()>,
 }
 
-impl<const HEADER_CAP: usize> Default for Static<HEADER_CAP> {
+impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> Default for Static<HEADER_CAP, FREE_IS_ZERO> {
     fn default() -> Self {
         Self::INIT
     }
 }
 
 // `memory` is guarded by `top`.
-unsafe impl<const HEADER_CAP: usize> Sync for Static<HEADER_CAP> {}
+unsafe impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> Sync for Static<HEADER_CAP, FREE_IS_ZERO> {}
 
-impl<const HEADER_CAP: usize> Static<HEADER_CAP> {
+impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> Static<HEADER_CAP, FREE_IS_ZERO> {
     /// The initialization constant. Equivalent to [`Self::new`].
     ///
     /// Note that this constant is not a default static variable, and shouldn't
@@ -96,10 +96,10 @@ impl<const HEADER_CAP: usize> Static<HEADER_CAP> {
     }
 }
 
-unsafe impl<const HEADER_CAP: usize> BaseAlloc for &'static Static<HEADER_CAP> {
-    const IS_ZEROED: bool = true;
+unsafe impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> BaseAlloc for &'static Static<HEADER_CAP, FREE_IS_ZERO> {
+    const IS_ZEROED: bool = FREE_IS_ZERO;
 
-    type Handle = StaticHandle;
+    type Handle = StaticHandle<FREE_IS_ZERO>;
 
     type Error = AllocError;
 

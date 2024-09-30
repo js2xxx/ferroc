@@ -17,7 +17,7 @@ use crate::config::SLAB_SIZE;
 
 /// A static memory handle, unable to be deallocated any longer.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct StaticHandle;
+pub struct StaticHandle<const IS_ZERO: bool>;
 
 /// The trait of base allocators.
 ///
@@ -151,9 +151,9 @@ impl<B: BaseAlloc> Chunk<B> {
     ///
     /// `ptr` must point to a valid, owned & static block of memory of
     /// `layout`.
-    pub const unsafe fn from_static(ptr: NonNull<u8>, layout: Layout) -> Self
+    pub const unsafe fn from_static<const IS_ZERO: bool>(ptr: NonNull<u8>, layout: Layout) -> Self
     where
-        B: BaseAlloc<Handle = StaticHandle>,
+        B: BaseAlloc<Handle = StaticHandle<IS_ZERO>>,
     {
         // SAFETY: `ptr` points to a valid, owned block of memory of `layout`.
         unsafe { Self::new(ptr, layout, StaticHandle) }

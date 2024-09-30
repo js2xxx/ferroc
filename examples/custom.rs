@@ -5,9 +5,9 @@ use ferroc::base::Static;
 // This is the capacity of the necessary additional static
 // memory space used by ferroc as the metadata storage.
 const HEADER_CAP: usize = 4096;
-static STATIC: Static<HEADER_CAP> = Static::new();
+static STATIC: Static<HEADER_CAP, true> = Static::new();
 
-ferroc::config!(pub Custom(&STATIC) => &'static Static::<HEADER_CAP>);
+ferroc::config!(pub Custom(&STATIC) => &'static Static::<HEADER_CAP, true>);
 
 #[global_allocator]
 static CUSTOM: Custom = Custom;
