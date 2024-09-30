@@ -41,14 +41,19 @@ pub struct Static<const HEADER_CAP: usize, const FREE_IS_ZERO: bool = false> {
     top: AtomicPtr<()>,
 }
 
-impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> Default for Static<HEADER_CAP, FREE_IS_ZERO> {
+impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> Default
+    for Static<HEADER_CAP, FREE_IS_ZERO>
+{
     fn default() -> Self {
         Self::INIT
     }
 }
 
 // `memory` is guarded by `top`.
-unsafe impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> Sync for Static<HEADER_CAP, FREE_IS_ZERO> {}
+unsafe impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> Sync
+    for Static<HEADER_CAP, FREE_IS_ZERO>
+{
+}
 
 impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> Static<HEADER_CAP, FREE_IS_ZERO> {
     /// The initialization constant. Equivalent to [`Self::new`].
@@ -96,7 +101,9 @@ impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> Static<HEADER_CAP, FREE_
     }
 }
 
-unsafe impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> BaseAlloc for &'static Static<HEADER_CAP, FREE_IS_ZERO> {
+unsafe impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> BaseAlloc
+    for &'static Static<HEADER_CAP, FREE_IS_ZERO>
+{
     const IS_ZEROED: bool = FREE_IS_ZERO;
 
     type Handle = StaticHandle<FREE_IS_ZERO>;
