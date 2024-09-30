@@ -5,8 +5,8 @@ use std::{
     alloc::Allocator,
     iter,
     sync::{
-        atomic::{AtomicBool, Ordering::Relaxed},
         Condvar, Mutex,
+        atomic::{AtomicBool, Ordering::Relaxed},
     },
     thread,
     time::{Duration, Instant},

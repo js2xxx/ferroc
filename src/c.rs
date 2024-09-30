@@ -4,7 +4,7 @@ use core::{
     ptr::{self, NonNull},
 };
 
-use crate::{base::Mmap, Ferroc};
+use crate::{Ferroc, base::Mmap};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn fe_malloc(size: usize) -> *mut c_void {

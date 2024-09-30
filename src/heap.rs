@@ -24,7 +24,7 @@ use crate::{
     arena::{Arenas, Error},
     base::BaseAlloc,
     config::{SHARD_SIZE, SLAB_SIZE},
-    slab::{AtomicBlockRef, BlockRef, Shard, ShardList, Slab, EMPTY_SHARD},
+    slab::{AtomicBlockRef, BlockRef, EMPTY_SHARD, Shard, ShardList, Slab},
     track,
 };
 
@@ -114,11 +114,7 @@ impl ObjSizeType {
 }
 
 const fn const_min(a: usize, b: usize) -> usize {
-    if a < b {
-        a
-    } else {
-        b
-    }
+    if a < b { a } else { b }
 }
 
 /// A memory allocator context of ferroc.
@@ -206,11 +202,7 @@ struct Bin<'arena> {
 impl<'arena> Bin<'arena> {
     const fn new(index: usize) -> Self {
         const fn const_max(a: usize, b: usize) -> usize {
-            if a > b {
-                a
-            } else {
-                b
-            }
+            if a > b { a } else { b }
         }
 
         // Bin #0 is identical to bin #1...
@@ -999,7 +991,7 @@ impl<F> AllocateOptions<F> {
 #[cfg(test)]
 mod tests {
     #[cfg(not(miri))]
-    use crate::heap::{obj_size, obj_size_index, GRANULARITY_SHIFT};
+    use crate::heap::{GRANULARITY_SHIFT, obj_size, obj_size_index};
 
     #[test]
     #[cfg(not(miri))]

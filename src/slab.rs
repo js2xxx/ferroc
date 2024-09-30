@@ -10,7 +10,7 @@ use core::{
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::Deref,
-    ptr::{self, addr_of_mut, NonNull},
+    ptr::{self, NonNull, addr_of_mut},
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering::*},
 };
 

@@ -4,9 +4,9 @@ use core::{
     ptr::{self, NonNull},
 };
 
+use crate::Ferroc;
 #[cfg(feature = "c-override")]
 use crate::c::fe_free;
-use crate::Ferroc;
 
 #[repr(C)]
 pub struct NoThrow {
