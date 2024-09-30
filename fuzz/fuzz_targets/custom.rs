@@ -5,21 +5,34 @@
 #![feature(ptr_metadata)]
 
 use std::{
-    alloc::{Allocator, Layout},
+    alloc::{Allocator, Global, Layout},
     iter,
+    pin::Pin,
     ptr::NonNull,
     sync::{atomic::Ordering::Relaxed, Mutex},
     thread,
 };
 
-use ferroc::{base::BaseAlloc, Ferroc};
+use ferroc::{
+    arena::Arenas,
+    base::{Chunk, Static},
+    heap::{ThreadData, ThreadLocal},
+};
 use libfuzzer_sys::fuzz_target;
 
 mod common;
 pub use self::common::*;
 
-#[global_allocator]
-static FERROC: Ferroc = Ferroc;
+const HEADER_CAP: usize = 4096;
+static STATIC: Static<HEADER_CAP> = Static::new();
+
+static ARENAS: Arenas<&'static Static<HEADER_CAP>> = Arenas::new(&STATIC);
+static THREAD_LOCAL: ThreadLocal<&'static Static<HEADER_CAP>> = ThreadLocal::new(&ARENAS);
+
+thread_local! {
+    static THREAD_DATA: ThreadData<'static, 'static, &'static Static<HEADER_CAP>>
+        = ThreadData::new(Pin::static_ref(&THREAD_LOCAL));
+}
 
 fuzz_target!(|action_sets: [Vec<Action>; THREADS]| {
     let transfers: Vec<_> = iter::repeat_with(|| Mutex::new(None))
@@ -37,13 +50,13 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
     let mut allocations = Vec::new();
 
     actions.into_iter().for_each(|action| match action {
-        Action::Allocate { size, align_shift, zeroed, iface } => {
+        Action::Allocate { size, align_shift, zeroed, .. } => {
             let align_shift = align_shift % 19;
             let size = size % 16777216 + 1;
             let align = 1 << align_shift;
             // eprintln!("actual size = {size:#x}, align = {align:#x}");
 
-            if let Some(a) = Allocation::new(size as usize, align, zeroed, iface) {
+            if let Some(a) = Allocation::new(size as usize, align, zeroed) {
                 allocations.push(a);
             }
         }
@@ -57,7 +70,7 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
                 allocations[index].check_layout();
             }
         }
-        Action::Collect { force } => Ferroc.collect(force),
+        Action::Collect { force } => THREAD_DATA.with(|td| td.collect(force)),
         Action::Transfer { from, to } => {
             if let Some(from) = (from as usize).checked_rem(allocations.len())
                 && let Some(to) = (to as usize).checked_rem(transfers.len())
@@ -78,8 +91,10 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
             {
                 let size = (size % 10 + 1) as usize;
                 let layout = Layout::from_size_align(size << 22, 1 << 22).unwrap();
-                let chunk = Ferroc.base().allocate(layout, false).unwrap();
-                Ferroc.manage(chunk).unwrap();
+
+                let ptr = Global.allocate(layout).unwrap();
+                let chunk = unsafe { Chunk::from_static(ptr.cast(), layout) };
+                ARENAS.manage(chunk).unwrap();
             }
         }
     });
@@ -88,44 +103,34 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
 struct Allocation {
     ptr: NonNull<[u8]>,
     layout: Layout,
-    iface: AllocIface,
 }
 
 unsafe impl Send for Allocation {}
 unsafe impl Sync for Allocation {}
 
 impl Allocation {
-    fn new(size: usize, align: usize, zeroed: bool, iface: AllocIface) -> Option<Self> {
+    fn new(size: usize, align: usize, zeroed: bool) -> Option<Self> {
         let layout = Layout::from_size_align(size, align).unwrap();
-        let ptr = match (iface, zeroed) {
-            (AllocIface::Ferroc, false) => {
-                NonNull::from_raw_parts(Ferroc.allocate(layout).ok()?, layout.size())
-            }
-            (AllocIface::Ferroc, true) => {
-                let ptr: NonNull<[u8]> =
-                    NonNull::from_raw_parts(Ferroc.allocate_zeroed(layout).ok()?, layout.size());
-                assert!(unsafe { ptr.as_ref().iter().all(|&b| b == 0) });
-                ptr
-            }
-            (AllocIface::Native, false) => <Ferroc as Allocator>::allocate(&Ferroc, layout).ok()?,
-            (AllocIface::Native, true) => {
-                let ptr = <Ferroc as Allocator>::allocate_zeroed(&Ferroc, layout).ok()?;
-                assert!(unsafe { ptr.as_ref().iter().all(|&b| b == 0) });
-                ptr
-            }
-            (AllocIface::Global, false) => std::alloc::Global.allocate(layout).ok()?,
-            (AllocIface::Global, true) => {
-                let ptr = std::alloc::Global.allocate_zeroed(layout).ok()?;
+        let ptr = match zeroed {
+            false => NonNull::from_raw_parts(
+                THREAD_DATA.with(|td| td.allocate(layout)).ok()?,
+                layout.size(),
+            ),
+            true => {
+                let ptr: NonNull<[u8]> = NonNull::from_raw_parts(
+                    THREAD_DATA.with(|td| td.allocate_zeroed(layout)).ok()?,
+                    layout.size(),
+                );
                 assert!(unsafe { ptr.as_ref().iter().all(|&b| b == 0) });
                 ptr
             }
         };
         unsafe { ptr.as_uninit_slice_mut()[size / 2].write(align.ilog2() as u8) };
-        Some(Allocation { ptr, layout, iface })
+        Some(Allocation { ptr, layout })
     }
 
     fn check_layout(&self) {
-        let req_layout = unsafe { Ferroc.layout_of(self.ptr.cast()) };
+        let req_layout = unsafe { THREAD_DATA.with(|td| td.layout_of(self.ptr.cast())) };
         assert!(
             req_layout.size() >= self.layout.size(),
             "ptr = {:p}\nreq = {:#x?}\nl = {:#x?}",
@@ -150,14 +155,6 @@ impl Drop for Allocation {
             self.layout.align().ilog2() as u8,
         );
 
-        unsafe {
-            match self.iface {
-                AllocIface::Ferroc => Ferroc.deallocate(self.ptr.cast(), self.layout),
-                AllocIface::Native => {
-                    <Ferroc as Allocator>::deallocate(&Ferroc, self.ptr.cast(), self.layout)
-                }
-                AllocIface::Global => std::alloc::Global.deallocate(self.ptr.cast(), self.layout),
-            }
-        }
+        unsafe { THREAD_DATA.with(|td| td.deallocate(self.ptr.cast(), self.layout)) }
     }
 }

@@ -9,6 +9,10 @@ on:
 jobs:
   coverage:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fuzzing-target: ["stress", "custom"]
 
     steps:
       - uses: actions/checkout@v4
@@ -58,14 +62,14 @@ jobs:
       - name: Fuzz target
         id: fuzz-target
         run: |
-          cargo fuzz run stress &
+          cargo fuzz run ${{ matrix.fuzzing-target }} &
           PID=$!
           sleep 60
           k(){ if c=$(pgrep -P $1);then for p in $c;do k $p;done;fi;kill $1; }; k $PID
-          cargo fuzz coverage stress
+          cargo fuzz coverage ${{ matrix.fuzzing-target }}
           cargo cov -- export -format=lcov \
-            -instr-profile=./fuzz/coverage/stress/coverage.profdata \
-            -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/stress \
+            -instr-profile=./fuzz/coverage/${{ matrix.fuzzing-target }}/coverage.profdata \
+            -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/${{ matrix.fuzzing-target }} \
             -sources ./src | rustfilt > target/lcov.txt
         env:
           RUSTFLAGS: -Cdebuginfo=2

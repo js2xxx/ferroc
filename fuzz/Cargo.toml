@@ -20,3 +20,10 @@ doc = false
 name = "stress"
 path = "fuzz_targets/stress.rs"
 test = false
+
+[[bin]]
+bench = false
+doc = false
+name = "custom"
+path = "fuzz_targets/custom.rs"
+test = false

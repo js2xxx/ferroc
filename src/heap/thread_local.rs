@@ -461,6 +461,40 @@ impl<'t, 'arena: 't, B: BaseAlloc> ThreadData<'t, 'arena, B> {
         let (heap, id) = thread_local.assign();
         ThreadData { thread_local, heap, id }
     }
+
+    /// Allocate a block of memory from the current thread-local heap.
+    ///
+    /// See [`Heap::allocate`] for more information.
+    pub fn allocate(&self, layout: Layout) -> Result<NonNull<()>, AllocError> {
+        self.heap.allocate(layout)
+    }
+
+    /// Allocate a block of memory from the current thread-local heap, and zero
+    /// it.
+    ///
+    /// See [`Heap::allocate_zeroed`] for more information.
+    pub fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<()>, AllocError> {
+        self.heap.allocate_zeroed(layout)
+    }
+
+    /// Get the layout of a block of memory from the current thread-local heap.
+    ///
+    /// # Safety
+    ///
+    /// See [`Heap::layout_of`] for more information.
+    pub unsafe fn layout_of(&self, ptr: NonNull<u8>) -> Layout {
+        unsafe { self.heap.layout_of(ptr) }
+    }
+
+    /// Deallocate a block of memory to the current thread-local heap.
+    ///
+    /// # Safety
+    ///
+    /// See [`Heap::deallocate`] for more information.
+    pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        // SAFETY: The pointer is valid for `layout`.
+        unsafe { self.heap.deallocate(ptr, layout) }
+    }
 }
 
 impl<'t, 'arena: 't, B: BaseAlloc> Deref for ThreadData<'t, 'arena, B> {
