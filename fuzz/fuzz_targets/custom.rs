@@ -24,12 +24,12 @@ mod common;
 pub use self::common::*;
 
 const HEADER_CAP: usize = 4096;
-static STATIC: Static<HEADER_CAP> = Static::new();
 
 scoped_tls::scoped_thread_local!(static THREAD_DATA: ThreadData<'static, 'static, &'static Static<HEADER_CAP>>);
 
 fuzz_target!(|action_sets: [Vec<Action>; THREADS]| {
-    let arenas = Arenas::new(&STATIC);
+    let base: Static<HEADER_CAP> = Static::new();
+    let arenas = Arenas::new(&base);
     let thread_local = pin!(ThreadLocal::new(&arenas));
 
     let transfers: Vec<_> = iter::repeat_with(|| Mutex::new(None))
@@ -55,7 +55,7 @@ fuzz_target!(|action_sets: [Vec<Action>; THREADS]| {
 });
 
 fn fuzz_one(
-    arenas: &Arenas<&'static Static<HEADER_CAP>>,
+    arenas: &Arenas<&Static<HEADER_CAP>>,
     actions: Vec<Action>,
     transfers: &[Mutex<Option<Allocation>>],
 ) {
@@ -106,7 +106,9 @@ fn fuzz_one(
 
                 let ptr = Global.allocate(layout).unwrap();
                 let chunk = unsafe { Chunk::from_static(ptr.cast(), layout) };
-                arenas.manage(chunk).unwrap();
+                if arenas.manage(chunk).is_err() {
+                    unsafe { Global.deallocate(ptr.cast(), layout) };
+                }
             }
         }
     });

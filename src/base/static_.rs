@@ -71,7 +71,7 @@ impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> Static<HEADER_CAP, FREE_
         }
     }
 
-    fn alloc_inner(&'static self, layout: Layout) -> Option<Chunk<&'static Self>> {
+    fn alloc_inner(&self, layout: Layout) -> Option<Chunk<&Self>> {
         let layout = layout.align_to(mem::align_of::<usize>()).ok()?;
         let base = self.memory.get().cast();
         let mut top = match self
@@ -102,7 +102,7 @@ impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> Static<HEADER_CAP, FREE_
 }
 
 unsafe impl<const HEADER_CAP: usize, const FREE_IS_ZERO: bool> BaseAlloc
-    for &'static Static<HEADER_CAP, FREE_IS_ZERO>
+    for &Static<HEADER_CAP, FREE_IS_ZERO>
 {
     const IS_ZEROED: bool = FREE_IS_ZERO;
 
