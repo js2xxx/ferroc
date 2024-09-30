@@ -137,7 +137,6 @@
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
 #![feature(const_pin)]
-#![feature(const_refs_to_static)]
 #![feature(let_chains)]
 #![feature(pointer_is_aligned_to)]
 #![feature(ptr_as_uninit)]
