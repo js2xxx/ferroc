@@ -1,10 +1,11 @@
 #![no_main]
+#![feature(allocator_api)]
 #![feature(let_chains)]
 #![feature(ptr_as_uninit)]
 #![feature(ptr_metadata)]
 
 use std::{
-    alloc::Layout,
+    alloc::{Allocator, Layout},
     iter,
     ptr::NonNull,
     sync::{
@@ -20,12 +21,20 @@ use libfuzzer_sys::{arbitrary::Arbitrary, fuzz_target};
 const THREADS: usize = 12;
 const TRANSFER_COUNT: usize = 1000;
 
+#[derive(Debug, Clone, Copy, Arbitrary)]
+enum AllocIface {
+    Ferroc,
+    Native,
+    Global,
+}
+
 #[derive(Debug, Arbitrary)]
 enum Action {
     Allocate {
         size: u32,
         align_shift: u8,
         zeroed: bool,
+        iface: AllocIface,
     },
     Deallocate {
         index: u8,
@@ -67,13 +76,13 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
     let mut allocations = Vec::new();
 
     actions.into_iter().for_each(|action| match action {
-        Action::Allocate { size, align_shift, zeroed } => {
+        Action::Allocate { size, align_shift, zeroed, iface } => {
             let align_shift = align_shift % 19;
             let size = size % 16777216 + 1;
             let align = 1 << align_shift;
             // eprintln!("actual size = {size:#x}, align = {align:#x}");
 
-            if let Some(a) = Allocation::new(size as usize, align, zeroed) {
+            if let Some(a) = Allocation::new(size as usize, align, zeroed, iface) {
                 allocations.push(a);
             }
         }
@@ -118,25 +127,40 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
 struct Allocation {
     ptr: NonNull<[u8]>,
     layout: Layout,
+    iface: AllocIface,
 }
 
 unsafe impl Send for Allocation {}
 unsafe impl Sync for Allocation {}
 
 impl Allocation {
-    fn new(size: usize, align: usize, zeroed: bool) -> Option<Self> {
+    fn new(size: usize, align: usize, zeroed: bool, iface: AllocIface) -> Option<Self> {
         let layout = Layout::from_size_align(size, align).unwrap();
-        let ptr = match zeroed {
-            false => NonNull::from_raw_parts(Ferroc.allocate(layout).ok()?, layout.size()),
-            true => {
+        let ptr = match (iface, zeroed) {
+            (AllocIface::Ferroc, false) => {
+                NonNull::from_raw_parts(Ferroc.allocate(layout).ok()?, layout.size())
+            }
+            (AllocIface::Ferroc, true) => {
                 let ptr: NonNull<[u8]> =
                     NonNull::from_raw_parts(Ferroc.allocate_zeroed(layout).ok()?, layout.size());
                 assert!(unsafe { ptr.as_ref().iter().all(|&b| b == 0) });
                 ptr
             }
+            (AllocIface::Native, false) => <Ferroc as Allocator>::allocate(&Ferroc, layout).ok()?,
+            (AllocIface::Native, true) => {
+                let ptr = <Ferroc as Allocator>::allocate_zeroed(&Ferroc, layout).ok()?;
+                assert!(unsafe { ptr.as_ref().iter().all(|&b| b == 0) });
+                ptr
+            }
+            (AllocIface::Global, false) => std::alloc::Global.allocate(layout).ok()?,
+            (AllocIface::Global, true) => {
+                let ptr = std::alloc::Global.allocate_zeroed(layout).ok()?;
+                assert!(unsafe { ptr.as_ref().iter().all(|&b| b == 0) });
+                ptr
+            }
         };
         unsafe { ptr.as_uninit_slice_mut()[size / 2].write(align.ilog2() as u8) };
-        Some(Allocation { ptr, layout })
+        Some(Allocation { ptr, layout, iface })
     }
 
     fn check_layout(&self) {
@@ -164,6 +188,15 @@ impl Drop for Allocation {
             unsafe { self.ptr.as_uninit_slice()[self.layout.size() / 2].assume_init_read() },
             self.layout.align().ilog2() as u8,
         );
-        unsafe { Ferroc.deallocate(self.ptr.cast(), self.layout) };
+
+        unsafe {
+            match self.iface {
+                AllocIface::Ferroc => Ferroc.deallocate(self.ptr.cast(), self.layout),
+                AllocIface::Native => {
+                    <Ferroc as Allocator>::deallocate(&Ferroc, self.ptr.cast(), self.layout)
+                }
+                AllocIface::Global => std::alloc::Global.deallocate(self.ptr.cast(), self.layout),
+            }
+        }
     }
 }
