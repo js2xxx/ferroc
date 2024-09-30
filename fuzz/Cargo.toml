@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 arbitrary = {version = "1", features = ["derive"]}
 libfuzzer-sys = "0.4"
+scoped-tls = "1.0"
 
 [dependencies.ferroc]
 path = ".."

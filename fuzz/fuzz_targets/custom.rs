@@ -7,7 +7,7 @@
 use std::{
     alloc::{Allocator, Global, Layout},
     iter,
-    pin::Pin,
+    pin::pin,
     ptr::NonNull,
     sync::{atomic::Ordering::Relaxed, Mutex},
     thread,
@@ -26,27 +26,39 @@ pub use self::common::*;
 const HEADER_CAP: usize = 4096;
 static STATIC: Static<HEADER_CAP> = Static::new();
 
-static ARENAS: Arenas<&'static Static<HEADER_CAP>> = Arenas::new(&STATIC);
-static THREAD_LOCAL: ThreadLocal<&'static Static<HEADER_CAP>> = ThreadLocal::new(&ARENAS);
-
-thread_local! {
-    static THREAD_DATA: ThreadData<'static, 'static, &'static Static<HEADER_CAP>>
-        = ThreadData::new(Pin::static_ref(&THREAD_LOCAL));
-}
+scoped_tls::scoped_thread_local!(static THREAD_DATA: ThreadData<'static, 'static, &'static Static<HEADER_CAP>>);
 
 fuzz_target!(|action_sets: [Vec<Action>; THREADS]| {
+    let arenas = Arenas::new(&STATIC);
+    let thread_local = pin!(ThreadLocal::new(&arenas));
+
     let transfers: Vec<_> = iter::repeat_with(|| Mutex::new(None))
         .take(TRANSFER_COUNT)
         .collect();
 
     thread::scope(|s| {
         for actions in action_sets {
-            s.spawn(|| fuzz_one(actions, &transfers));
+            s.spawn(|| {
+                let td = ThreadData::new(thread_local.as_ref());
+                THREAD_DATA.set(
+                    &unsafe {
+                        core::mem::transmute::<
+                            ferroc::heap::ThreadData<'_, '_, &ferroc::base::Static<HEADER_CAP>>,
+                            ferroc::heap::ThreadData<'_, '_, &ferroc::base::Static<HEADER_CAP>>,
+                        >(td)
+                    },
+                    || fuzz_one(&arenas, actions, &transfers),
+                )
+            });
         }
     });
 });
 
-fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
+fn fuzz_one(
+    arenas: &Arenas<&'static Static<HEADER_CAP>>,
+    actions: Vec<Action>,
+    transfers: &[Mutex<Option<Allocation>>],
+) {
     let mut allocations = Vec::new();
 
     actions.into_iter().for_each(|action| match action {
@@ -94,7 +106,7 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
 
                 let ptr = Global.allocate(layout).unwrap();
                 let chunk = unsafe { Chunk::from_static(ptr.cast(), layout) };
-                ARENAS.manage(chunk).unwrap();
+                arenas.manage(chunk).unwrap();
             }
         }
     });
