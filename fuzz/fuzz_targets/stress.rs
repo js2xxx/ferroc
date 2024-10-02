@@ -73,6 +73,9 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
             let layout = Layout::from_size_align(size << 22, 1 << 22).unwrap();
 
             if let Ok(chunk) = Ferroc.base().allocate(layout, false) {
+                let chunk_layout = chunk.layout();
+                assert!(chunk_layout.size() >= layout.size());
+                assert!(chunk_layout.align() >= layout.align());
                 let _ = Ferroc.manage(chunk);
             }
         }

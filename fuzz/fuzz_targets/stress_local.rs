@@ -27,6 +27,8 @@ scoped_tls::scoped_thread_local!(static THREAD_DATA: ThreadData<'static, 'static
 
 fuzz_target!(|action_sets: [Vec<Action>; THREADS]| {
     let base = Mmap::new();
+    let _ = base.page_size();
+
     let arenas = Arenas::new(base);
     let thread_local = pin!(ThreadLocal::new(&arenas));
 
@@ -106,6 +108,9 @@ fn fuzz_one(arenas: &Arenas<Mmap>, actions: Vec<Action>, transfers: &[Mutex<Opti
                 let layout = Layout::from_size_align(size << 22, 1 << 22).unwrap();
 
                 let chunk = arenas.base().allocate(layout, false).unwrap();
+                let chunk_layout = chunk.layout();
+                assert!(chunk_layout.size() >= layout.size());
+                assert!(chunk_layout.align() >= layout.align());
                 arenas.manage(chunk).unwrap();
             }
         }
