@@ -73,6 +73,23 @@ jobs:
           RUST_BACKTRACE: 1
         continue-on-error: true
 
+      - name: Fuzz target (stress_local)
+        id: fuzz-target-stress_local
+        run: |
+          cargo fuzz run stress_local &
+          PID=$!
+          sleep 60
+          k(){ if c=$(pgrep -P $1);then for p in $c;do k $p;done;fi;kill $1; }; k $PID
+          cargo fuzz coverage stress_local
+          cargo cov -- export -format=lcov \
+            -instr-profile=./fuzz/coverage/stress_local/coverage.profdata \
+            -object ./target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/stress_local \
+            -sources ./src | rustfilt >> target/lcov.txt
+        env:
+          RUSTFLAGS: -Cdebuginfo=2
+          RUST_BACKTRACE: 1
+        continue-on-error: true
+
       - name: Fuzz target (custom)
         id: fuzz-target-custom
         run: |
@@ -101,7 +118,7 @@ jobs:
         with:
           path: fuzzing-data
           name: fuzzing-data
-        if: ${{ steps.fuzz-target-stress.outcome == 'failure' || steps.fuzz-target-custom.outcome == 'failure'}}
+        if: ${{ steps.fuzz-target-stress.outcome == 'failure' || steps.fuzz-target-stress_local.outcome == 'failure' || steps.fuzz-target-custom.outcome == 'failure'}}
 
       - name: Upload coverage report
         uses: codecov/codecov-action@v4
@@ -110,4 +127,4 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: js2xxx/ferroc
-        if: ${{ steps.fuzz-target-stress.outcome == 'success' && steps.fuzz-target-custom.outcome == 'success' }}
+        if: ${{ steps.fuzz-target-stress.outcome == 'success' && steps.fuzz-target-stress_local.outcome == 'success' && steps.fuzz-target-custom.outcome == 'success' }}

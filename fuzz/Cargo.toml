@@ -26,6 +26,13 @@ test = false
 [[bin]]
 bench = false
 doc = false
+name = "stress_local"
+path = "fuzz_targets/stress_local.rs"
+test = false
+
+[[bin]]
+bench = false
+doc = false
 name = "custom"
 path = "fuzz_targets/custom.rs"
 test = false

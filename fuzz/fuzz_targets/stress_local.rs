@@ -5,36 +5,63 @@
 #![feature(ptr_metadata)]
 
 use std::{
-    alloc::{Allocator, GlobalAlloc, Layout},
+    alloc::{Allocator, Layout},
     iter,
+    pin::pin,
     ptr::NonNull,
-    sync::Mutex,
+    sync::{atomic::Ordering::Relaxed, Mutex},
     thread,
 };
 
-use ferroc::{base::BaseAlloc, Ferroc};
+use ferroc::{
+    arena::Arenas,
+    base::{BaseAlloc, Mmap},
+    heap::{ThreadData, ThreadLocal},
+};
 use libfuzzer_sys::fuzz_target;
 
 mod common;
 pub use self::common::*;
 
-#[global_allocator]
-static FERROC: Ferroc = Ferroc;
+scoped_tls::scoped_thread_local!(static THREAD_DATA: ThreadData<'static, 'static, Mmap>);
 
 fuzz_target!(|action_sets: [Vec<Action>; THREADS]| {
+    let base = Mmap::new();
+    let arenas = Arenas::new(base);
+    let thread_local = pin!(ThreadLocal::new(&arenas));
+
     let transfers: Vec<_> = iter::repeat_with(|| Mutex::new(None))
         .take(TRANSFER_COUNT)
         .collect();
 
     thread::scope(|s| {
         for actions in action_sets {
-            s.spawn(|| fuzz_one(actions, &transfers));
+            s.spawn(|| {
+                let td = ThreadData::new(thread_local.as_ref());
+                let td = unsafe {
+                    core::mem::transmute::<
+                        ferroc::heap::ThreadData<'_, '_, ferroc::base::Mmap>,
+                        ferroc::heap::ThreadData<'_, '_, ferroc::base::Mmap>,
+                    >(td)
+                };
+                THREAD_DATA.set(&td, || fuzz_one(&arenas, actions, &transfers))
+            });
         }
     });
+
+    let main_td = ThreadData::new(thread_local.as_ref());
+    let main_td = unsafe {
+        core::mem::transmute::<
+            ferroc::heap::ThreadData<'_, '_, ferroc::base::Mmap>,
+            ferroc::heap::ThreadData<'_, '_, ferroc::base::Mmap>,
+        >(main_td)
+    };
+    THREAD_DATA.set(&main_td, || drop(transfers))
 });
 
-fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
+fn fuzz_one(arenas: &Arenas<Mmap>, actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
     let mut allocations = Vec::new();
+
     actions.into_iter().for_each(|action| match action {
         Action::Allocate { size, align_shift, zeroed, iface } => {
             let align_shift = align_shift % 19;
@@ -56,7 +83,7 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
                 allocations[index].check_layout();
             }
         }
-        Action::Collect { force } => Ferroc.collect(force),
+        Action::Collect { force } => THREAD_DATA.with(|td| td.collect(force)),
         Action::Transfer { from, to } => {
             if let Some(from) = (from as usize).checked_rem(allocations.len())
                 && let Some(to) = (to as usize).checked_rem(transfers.len())
@@ -69,11 +96,17 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
             }
         }
         Action::Manage { size } => {
-            let size = (size % 10 + 1) as usize;
-            let layout = Layout::from_size_align(size << 22, 1 << 22).unwrap();
+            let managed = MANAGED.load(Relaxed);
+            if managed < MAX_MANAGED
+                && MANAGED
+                    .compare_exchange(managed, managed + 1, Relaxed, Relaxed)
+                    .is_ok()
+            {
+                let size = (size % 10 + 1) as usize;
+                let layout = Layout::from_size_align(size << 22, 1 << 22).unwrap();
 
-            if let Ok(chunk) = Ferroc.base().allocate(layout, false) {
-                let _ = Ferroc.manage(chunk);
+                let chunk = arenas.base().allocate(layout, false).unwrap();
+                arenas.manage(chunk).unwrap();
             }
         }
     });
@@ -92,44 +125,35 @@ impl Allocation {
     fn new(size: usize, align: usize, zeroed: bool, iface: AllocIface) -> Option<Self> {
         let layout = Layout::from_size_align(size, align).unwrap();
         let ptr = match (iface, zeroed) {
-            (AllocIface::Ferroc, false) => {
-                NonNull::from_raw_parts(Ferroc.allocate(layout).ok()?, layout.size())
-            }
+            (AllocIface::Ferroc, false) => NonNull::from_raw_parts(
+                THREAD_DATA.with(|td| td.allocate(layout)).ok()?,
+                layout.size(),
+            ),
             (AllocIface::Ferroc, true) => {
-                let ptr: NonNull<[u8]> =
-                    NonNull::from_raw_parts(Ferroc.allocate_zeroed(layout).ok()?, layout.size());
+                let ptr: NonNull<[u8]> = NonNull::from_raw_parts(
+                    THREAD_DATA.with(|td| td.allocate_zeroed(layout)).ok()?,
+                    layout.size(),
+                );
                 assert!(unsafe { ptr.as_ref().iter().all(|&b| b == 0) });
                 ptr
             }
-            (AllocIface::Native, false) => Allocator::allocate(&Ferroc, layout).ok()?,
-            (AllocIface::Native, true) => {
-                let ptr = Allocator::allocate_zeroed(&Ferroc, layout).ok()?;
+            (AllocIface::Native | AllocIface::Global, false) => THREAD_DATA
+                .with(|td| Allocator::allocate(td, layout))
+                .ok()?,
+            (AllocIface::Native | AllocIface::Global, true) => {
+                let ptr = THREAD_DATA
+                    .with(|td| Allocator::allocate_zeroed(td, layout))
+                    .ok()?;
                 assert!(unsafe { ptr.as_ref().iter().all(|&b| b == 0) });
                 ptr
             }
-            (AllocIface::Global, false) => unsafe {
-                let ptr = GlobalAlloc::alloc(&Ferroc, layout);
-                if ptr.is_null() {
-                    return None;
-                }
-                NonNull::slice_from_raw_parts(NonNull::new_unchecked(ptr), layout.size())
-            },
-            (AllocIface::Global, true) => unsafe {
-                let ptr = GlobalAlloc::alloc(&Ferroc, layout);
-                if ptr.is_null() {
-                    return None;
-                }
-                let ptr = NonNull::slice_from_raw_parts(NonNull::new_unchecked(ptr), layout.size());
-                assert!(ptr.as_ref().iter().all(|&b| b == 0));
-                ptr
-            },
         };
         unsafe { ptr.as_uninit_slice_mut()[size / 2].write(align.ilog2() as u8) };
         Some(Allocation { ptr, layout, iface })
     }
 
     fn check_layout(&self) {
-        let req_layout = unsafe { Ferroc.layout_of(self.ptr.cast()) };
+        let req_layout = unsafe { THREAD_DATA.with(|td| td.layout_of(self.ptr.cast())) };
         assert!(
             req_layout.size() >= self.layout.size(),
             "ptr = {:p}\nreq = {:#x?}\nl = {:#x?}",
@@ -154,14 +178,13 @@ impl Drop for Allocation {
             self.layout.align().ilog2() as u8,
         );
 
-        unsafe {
-            match self.iface {
-                AllocIface::Ferroc => Ferroc.deallocate(self.ptr.cast(), self.layout),
-                AllocIface::Native => Allocator::deallocate(&Ferroc, self.ptr.cast(), self.layout),
-                AllocIface::Global => {
-                    GlobalAlloc::dealloc(&Ferroc, self.ptr.as_ptr().cast(), self.layout)
-                }
-            }
+        match self.iface {
+            AllocIface::Ferroc => unsafe {
+                THREAD_DATA.with(|td| td.deallocate(self.ptr.cast(), self.layout))
+            },
+            AllocIface::Native | AllocIface::Global => unsafe {
+                THREAD_DATA.with(|td| Allocator::deallocate(td, self.ptr.cast(), self.layout))
+            },
         }
     }
 }
