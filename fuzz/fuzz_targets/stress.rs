@@ -115,7 +115,7 @@ impl Allocation {
                 NonNull::slice_from_raw_parts(NonNull::new_unchecked(ptr), layout.size())
             },
             (AllocIface::Global, true) => unsafe {
-                let ptr = GlobalAlloc::alloc(&Ferroc, layout);
+                let ptr = GlobalAlloc::alloc_zeroed(&Ferroc, layout);
                 if ptr.is_null() {
                     return None;
                 }
