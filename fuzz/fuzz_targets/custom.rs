@@ -39,6 +39,8 @@ fn load_memory() {
 }
 
 fuzz_target!(|action_sets: [Vec<Action>; THREADS]| {
+    let _: Static<16> = Static::default();
+
     let transfers: Vec<_> = iter::repeat_with(|| Mutex::new(None))
         .take(TRANSFER_COUNT)
         .collect();
