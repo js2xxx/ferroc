@@ -926,7 +926,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
 impl<'arena: 'cx, 'cx, B: BaseAlloc> Drop for Heap<'arena, 'cx, B> {
     fn drop(&mut self) {
-        if let Some(cx) = self.cx.take() {
+        if let Some(cx) = self.cx {
             self.try_free_delayed(true);
 
             let iter = (self.shards.iter().map(|bin| &bin.list))
