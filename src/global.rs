@@ -47,7 +47,6 @@ macro_rules! config_inner {
         #[doc = concat!("\n\nSee [`Error`](", stringify!($crate), "::arena::Error) for more information.")]
         $vis type Error = $crate::arena::Error<$bt>;
         type ThreadLocal<'arena> = $crate::heap::ThreadLocal<'arena, $bt>;
-        type AllocateOptions<F> = $crate::heap::AllocateOptions<F>;
     };
     (@ARENA $vis:vis, $bs:expr) => {
         static ARENAS: Arenas = Arenas::new($bs);
@@ -120,8 +119,7 @@ macro_rules! config_inner {
             {
                 thread::with_lazy(|heap, fallback| {
                     // SAFETY: this fallback returns an initialized heap.
-                    let options = unsafe { AllocateOptions::new(fallback) };
-                    heap.allocate_with(layout, false, options)
+                    heap.allocate_with(layout, false, unsafe { Heap::options().fallback(fallback) })
                 })
             }
 
@@ -142,8 +140,7 @@ macro_rules! config_inner {
             {
                 thread::with_lazy(|heap, fallback| {
                     // SAFETY: this fallback returns an initialized heap.
-                    let options = unsafe { AllocateOptions::new(fallback) };
-                    heap.allocate_with(layout, true, options)
+                    heap.allocate_with(layout, true, unsafe { Heap::options().fallback(fallback) })
                 })
             }
 
@@ -189,24 +186,15 @@ macro_rules! config_inner {
             fn allocate(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
-                thread::with_lazy(|heap, fallback| {
-                    // SAFETY: this fallback returns an initialized heap.
-                    let options = unsafe { AllocateOptions::new(fallback) };
-                    heap.allocate_with(layout, false, options)
-                        .map(|t| core::ptr::NonNull::from_raw_parts(t, layout.size()))
-                })
+                self.allocate(layout).map(|t| core::ptr::NonNull::from_raw_parts(t, layout.size()))
             }
 
             #[inline]
             fn allocate_zeroed(&self, layout: core::alloc::Layout)
                 -> Result<core::ptr::NonNull<[u8]>, core::alloc::AllocError>
             {
-                thread::with_lazy(|heap, fallback| {
-                    // SAFETY: this fallback returns an initialized heap.
-                    let options = unsafe { AllocateOptions::new(fallback) };
-                    heap.allocate_with(layout, true, options)
-                        .map(|t| core::ptr::NonNull::from_raw_parts(t, layout.size()))
-                })
+                self.allocate_zeroed(layout)
+                    .map(|t| core::ptr::NonNull::from_raw_parts(t, layout.size()))
             }
 
             #[inline]
@@ -223,20 +211,14 @@ macro_rules! config_inner {
         unsafe impl core::alloc::GlobalAlloc for $name {
             #[inline]
             unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-                thread::with_lazy(|heap, fallback|
-                    // SAFETY: The provided fallback is valid.
-                    heap.allocate_with(layout, false, unsafe { Heap::options().fallback(fallback) })
-                        .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
-                )
+                self.allocate(layout)
+                    .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
             }
 
             #[inline]
             unsafe fn alloc_zeroed(&self, layout: core::alloc::Layout) -> *mut u8 {
-                thread::with_lazy(|heap, fallback|
-                    // SAFETY: The provided fallback is valid.
-                    heap.allocate_with(layout, true, unsafe { Heap::options().fallback(fallback) })
-                        .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
-                )
+                self.allocate_zeroed(layout)
+                    .map_or(core::ptr::null_mut(), |ptr| ptr.as_ptr().cast())
             }
 
             #[inline]
@@ -318,6 +300,9 @@ macro_rules! config {
 macro_rules! config_mod {
     ($vis:vis $name:ident: $($rest:tt)*) => {
         $vis mod $name {
+            #[allow(unused_imports)]
+            use super::*;
+
             $crate::config!($($rest)*);
         }
     };
