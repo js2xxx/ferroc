@@ -53,6 +53,7 @@ jobs:
           mkdir -p fuzzing-data/artifacts && cp -r fuzzing-data/artifacts fuzz
           mkdir -p fuzzing-data/corpus && cp -r fuzzing-data/corpus fuzz
           mkdir -p fuzzing-data/coverage && cp -r fuzzing-data/coverage fuzz
+          mkdir -p target
           touch target/lcov.txt
 
       - name: Fuzz target (stress)
