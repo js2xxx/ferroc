@@ -12,7 +12,7 @@ use std::{
     thread,
 };
 
-use ferroc::base::Static;
+use ferroc::base::{BaseAlloc, Static};
 use libfuzzer_sys::fuzz_target;
 
 mod common;
@@ -29,7 +29,7 @@ fn load_memory() {
     use core::cell::UnsafeCell;
 
     #[repr(align(4194304))]
-    struct Memory(UnsafeCell<[u8; 2097152]>);
+    struct Memory(UnsafeCell<[u64; 2097152]>);
     unsafe impl Sync for Memory {}
     static STATIC_MEM: Memory = Memory(UnsafeCell::new([0; 2097152]));
 
@@ -85,7 +85,14 @@ fn fuzz_one(actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {
                 }
             }
         }
-        Action::Manage { .. } => {}
+        Action::Manage { size } => {
+            let size = (size % 10 + 1) as usize;
+            let layout = Layout::from_size_align(size << 22, 1 << 22).unwrap();
+
+            if let Ok(chunk) = Custom.base().allocate(layout, false) {
+                let _ = Custom.manage(chunk);
+            }
+        }
     });
 }
 
