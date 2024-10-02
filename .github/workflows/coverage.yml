@@ -70,6 +70,7 @@ jobs:
             -sources ./src | rustfilt >> target/lcov.txt
         env:
           RUSTFLAGS: -Cdebuginfo=2
+          RUST_BACKTRACE: 1
         continue-on-error: true
 
       - name: Fuzz target (custom)
@@ -86,6 +87,7 @@ jobs:
             -sources ./src | rustfilt >> target/lcov.txt
         env:
           RUSTFLAGS: -Cdebuginfo=2
+          RUST_BACKTRACE: 1
         continue-on-error: true
 
       - name: Save fuzzing data

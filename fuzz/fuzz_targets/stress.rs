@@ -30,6 +30,25 @@ fuzz_target!(|action_sets: [Vec<Action>; THREADS]| {
     let arenas = Arenas::new(base);
     let thread_local = pin!(ThreadLocal::new(&arenas));
 
+    let transfers: Vec<_> = iter::repeat_with(|| Mutex::new(None))
+        .take(TRANSFER_COUNT)
+        .collect();
+
+    thread::scope(|s| {
+        for actions in action_sets {
+            s.spawn(|| {
+                let td = ThreadData::new(thread_local.as_ref());
+                let td = unsafe {
+                    core::mem::transmute::<
+                        ferroc::heap::ThreadData<'_, '_, ferroc::base::Mmap>,
+                        ferroc::heap::ThreadData<'_, '_, ferroc::base::Mmap>,
+                    >(td)
+                };
+                THREAD_DATA.set(&td, || fuzz_one(&arenas, actions, &transfers))
+            });
+        }
+    });
+
     let main_td = ThreadData::new(thread_local.as_ref());
     let main_td = unsafe {
         core::mem::transmute::<
@@ -37,27 +56,7 @@ fuzz_target!(|action_sets: [Vec<Action>; THREADS]| {
             ferroc::heap::ThreadData<'_, '_, ferroc::base::Mmap>,
         >(main_td)
     };
-
-    THREAD_DATA.set(&main_td, || {
-        let transfers: Vec<_> = iter::repeat_with(|| Mutex::new(None))
-            .take(TRANSFER_COUNT)
-            .collect();
-
-        thread::scope(|s| {
-            for actions in action_sets {
-                s.spawn(|| {
-                    let td = ThreadData::new(thread_local.as_ref());
-                    let td = unsafe {
-                        core::mem::transmute::<
-                            ferroc::heap::ThreadData<'_, '_, ferroc::base::Mmap>,
-                            ferroc::heap::ThreadData<'_, '_, ferroc::base::Mmap>,
-                        >(td)
-                    };
-                    THREAD_DATA.set(&td, || fuzz_one(&arenas, actions, &transfers))
-                });
-            }
-        });
-    })
+    THREAD_DATA.set(&main_td, || drop(transfers))
 });
 
 fn fuzz_one(arenas: &Arenas<Mmap>, actions: Vec<Action>, transfers: &[Mutex<Option<Allocation>>]) {

@@ -285,7 +285,12 @@ pub(crate) static EMPTY_SHARD: EmptyShard = EmptyShard(Shard {
     delayed_free: AtomicPtr::new(ptr::null_mut()),
 });
 
-/// The non-atomic version can cause a racy read-write, where thread #1 are
+#[cfg(not(any(miri, feature = "track-valgrind")))]
+type ShardFlagsStorage = Cell<u8>;
+#[cfg(any(miri, feature = "track-valgrind"))]
+type ShardFlagsStorage = AtomicU8;
+
+/// The non-atomic version could cause a racy read-write, where thread #1 are
 /// setting `in_full` or `has_aligned` when thread #2 tries to check
 /// `has_aligned`.
 ///
@@ -297,87 +302,101 @@ pub(crate) static EMPTY_SHARD: EmptyShard = EmptyShard(Shard {
 ///    user only after `has_aligned` being set, let alone the block being passed
 ///    to another thread and freed there (CORRECT? FIXME?).
 #[derive(Default)]
-#[cfg(not(any(miri, feature = "track-valgrind")))]
-pub(crate) struct ShardFlags(Cell<u8>);
-
-#[derive(Default)]
-#[cfg(any(miri, feature = "track-valgrind"))]
-pub(crate) struct ShardFlags(AtomicU8);
+#[repr(transparent)]
+pub(crate) struct ShardFlags(ShardFlagsStorage);
 
 #[cfg(not(any(miri, feature = "track-valgrind")))]
 impl ShardFlags {
-    const IS_IN_FULL: u8 = 0b0000_0001;
-    const HAS_ALIGNED: u8 = 0b0000_0010;
-
-    const fn new() -> Self {
-        Self(Cell::new(0))
+    #[inline(always)]
+    fn get(&self) -> u8 {
+        self.0.get()
     }
 
-    pub(crate) fn is_in_full(&self) -> bool {
-        self.0.get() & Self::IS_IN_FULL != 0
+    #[inline(always)]
+    unsafe fn raw_get(this: *const Self) -> u8 {
+        unsafe { (*ptr::addr_of!((*this).0)).get() }
     }
 
-    pub(crate) fn set_in_full(&self, in_full: bool) {
-        if in_full {
-            self.0.set(self.0.get() | Self::IS_IN_FULL);
-        } else {
-            self.0.set(self.0.get() & !Self::IS_IN_FULL);
-        }
+    #[inline(always)]
+    fn set(&self, value: u8) {
+        self.0.set(value);
     }
 
-    pub(crate) fn set_align(&self) {
-        self.0.set(self.0.get() | Self::HAS_ALIGNED);
+    #[inline(always)]
+    fn set_or(&self, value: u8) {
+        self.0.set(self.0.get() | value);
     }
 
-    pub(crate) fn test_zero(&self) -> bool {
-        self.0.get() == 0
-    }
-
-    pub(crate) unsafe fn has_aligned(this: *const ShardFlags) -> bool {
-        // SAFETY: No explicit reference is created.
-        (unsafe { (*ptr::addr_of!((*this).0)).get() }) & Self::HAS_ALIGNED != 0
-    }
-
-    pub(crate) fn reset(&self) {
-        self.0.set(0)
+    #[inline(always)]
+    fn set_and(&self, value: u8) {
+        self.0.set(self.0.get() & value);
     }
 }
 
 #[cfg(any(miri, feature = "track-valgrind"))]
 impl ShardFlags {
+    #[inline(always)]
+    fn get(&self) -> u8 {
+        self.0.load(Relaxed)
+    }
+
+    #[inline(always)]
+    unsafe fn raw_get(this: *const Self) -> u8 {
+        unsafe { (*ptr::addr_of!((*this).0)).load(Relaxed) }
+    }
+
+    #[inline(always)]
+    fn set(&self, value: u8) {
+        self.0.store(value, Relaxed);
+    }
+
+    #[inline(always)]
+    fn set_or(&self, value: u8) {
+        self.0.fetch_or(value, Relaxed);
+    }
+
+    #[inline(always)]
+    fn set_and(&self, value: u8) {
+        self.0.fetch_and(value, Relaxed);
+    }
+}
+
+impl ShardFlags {
     const IS_IN_FULL: u8 = 0b0000_0001;
     const HAS_ALIGNED: u8 = 0b0000_0010;
 
     const fn new() -> Self {
-        Self(AtomicU8::new(0))
+        Self(ShardFlagsStorage::new(0))
     }
 
     pub(crate) fn is_in_full(&self) -> bool {
-        self.0.load(Relaxed) & Self::IS_IN_FULL != 0
+        self.get() & Self::IS_IN_FULL != 0
     }
 
     pub(crate) fn set_in_full(&self, in_full: bool) {
         if in_full {
-            self.0.fetch_or(Self::IS_IN_FULL, Relaxed);
+            self.set_or(Self::IS_IN_FULL);
         } else {
-            self.0.fetch_and(!Self::IS_IN_FULL, Relaxed);
+            self.set_and(!Self::IS_IN_FULL);
         }
     }
 
     pub(crate) fn set_align(&self) {
-        self.0.fetch_or(Self::HAS_ALIGNED, Relaxed);
+        self.set_or(Self::HAS_ALIGNED);
     }
 
+    /// Returns `!self.has_aligned() && !self.is_in_full()`.
     pub(crate) fn test_zero(&self) -> bool {
-        self.0.load(Relaxed) == 0
+        self.get() == 0
     }
 
     pub(crate) unsafe fn has_aligned(this: *const ShardFlags) -> bool {
-        (unsafe { (*ptr::addr_of!((*this).0)).load(Relaxed) }) & Self::HAS_ALIGNED != 0
+        // SAFETY: No explicit reference is created.
+        (unsafe { Self::raw_get(this) }) & Self::HAS_ALIGNED != 0
     }
 
     pub(crate) fn reset(&self) {
-        self.0.store(0, Relaxed)
+        self.set(0)
     }
 }
 

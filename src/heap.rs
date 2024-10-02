@@ -823,6 +823,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
         if self.thread_id() == thread_id {
             // SAFETY: We're in the same thread.
+            // NOTE: Currently there's only one heap per thread, so we don't need to check
+            // the belonged heap.
             let shard = unsafe { shard.as_ref() };
             if shard.flags.test_zero() {
                 track::deallocate(ptr, 0);
