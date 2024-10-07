@@ -184,7 +184,7 @@ impl<'arena, B: BaseAlloc> Context<'arena, B> {
     }
 }
 
-impl<'arena, B: BaseAlloc> Drop for Context<'arena, B> {
+impl<B: BaseAlloc> Drop for Context<'_, B> {
     fn drop(&mut self) {
         #[cfg(debug_assertions)]
         debug_assert!(self.free_shards.is_empty());
@@ -199,7 +199,7 @@ struct Bin<'arena> {
     max_direct_index: usize,
 }
 
-impl<'arena> Bin<'arena> {
+impl Bin<'_> {
     const fn new(index: usize) -> Self {
         const fn const_max(a: usize, b: usize) -> usize {
             if a > b { a } else { b }

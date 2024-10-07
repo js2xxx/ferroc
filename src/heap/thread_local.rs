@@ -51,7 +51,7 @@ struct Entry<'arena, B: BaseAlloc> {
     _marker: PhantomPinned,
 }
 
-impl<'arena, B: BaseAlloc> Drop for Entry<'arena, B> {
+impl<B: BaseAlloc> Drop for Entry<'_, B> {
     fn drop(&mut self) {
         // SAFETY: The drop order should be explicitly specified: The heap should be
         // dropped before the context.
@@ -158,7 +158,7 @@ pub struct ThreadLocal<'arena, B: BaseAlloc> {
 //   data race either;
 // - For the empty heap, this structure is immutable since empty heaps cannot
 //   allocate anything, and thus cannot deallocate anything either.
-unsafe impl<'arena, B: BaseAlloc + Sync> Sync for ThreadLocal<'arena, B> {}
+unsafe impl<B: BaseAlloc + Sync> Sync for ThreadLocal<'_, B> {}
 
 impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     /// Creates a collection for thread-local heaps.
@@ -378,7 +378,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     }
 }
 
-impl<'arena, B: BaseAlloc> Drop for ThreadLocal<'arena, B> {
+impl<B: BaseAlloc> Drop for ThreadLocal<'_, B> {
     fn drop(&mut self) {
         for (index, bucket_slot) in self.buckets.iter_mut().enumerate() {
             // SAFETY: `drop` only during drops. Following the normal drop order.

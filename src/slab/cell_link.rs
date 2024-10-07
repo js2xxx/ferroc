@@ -23,7 +23,7 @@ impl<'a, T: 'a + ?Sized> core::fmt::Debug for CellLink<'a, T> {
     }
 }
 
-impl<'a, T> CellLink<'a, T> {
+impl<T> CellLink<'_, T> {
     pub const fn new() -> Self {
         CellLink {
             #[cfg(debug_assertions)]
@@ -34,14 +34,14 @@ impl<'a, T> CellLink<'a, T> {
     }
 }
 
-impl<'a, T> CellLink<'a, T> {
+impl<T> CellLink<'_, T> {
     #[cfg(debug_assertions)]
     pub fn is_linked(&self) -> bool {
         self.linked_to.get() != 0
     }
 }
 
-impl<'a, T> Default for CellLink<'a, T> {
+impl<T> Default for CellLink<'_, T> {
     fn default() -> Self {
         Self::new()
     }
@@ -252,7 +252,7 @@ pub struct Drain<'a, 'list, T: CellLinked<'a>, F: FnMut(&'a T) -> bool> {
     pred: F,
 }
 
-impl<'a, 'list, T: CellLinked<'a>, F: FnMut(&'a T) -> bool> Iterator for Drain<'a, 'list, T, F> {
+impl<'a, T: CellLinked<'a>, F: FnMut(&'a T) -> bool> Iterator for Drain<'a, '_, T, F> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -267,7 +267,7 @@ impl<'a, 'list, T: CellLinked<'a>, F: FnMut(&'a T) -> bool> Iterator for Drain<'
     }
 }
 
-impl<'a, 'list, T: CellLinked<'a>, F: FnMut(&'a T) -> bool> Drop for Drain<'a, 'list, T, F> {
+impl<'a, T: CellLinked<'a>, F: FnMut(&'a T) -> bool> Drop for Drain<'a, '_, T, F> {
     fn drop(&mut self) {
         self.for_each(drop)
     }

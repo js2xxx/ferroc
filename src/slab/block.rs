@@ -17,10 +17,10 @@ use crate::track;
 pub(crate) struct BlockRef<'a>(NonNull<()>, PhantomData<&'a ()>);
 
 // SAFETY: The block owns its underlying memory.
-unsafe impl<'a> Send for BlockRef<'a> {}
-unsafe impl<'a> Sync for BlockRef<'a> {}
+unsafe impl Send for BlockRef<'_> {}
+unsafe impl Sync for BlockRef<'_> {}
 
-impl<'a> BlockRef<'a> {
+impl BlockRef<'_> {
     const SLOT_SIZE: usize = mem::size_of::<Option<NonNull<()>>>();
 
     #[must_use = "blocks must be used"]
@@ -98,7 +98,7 @@ impl Drop for BlockRef<'_> {
 #[repr(transparent)]
 pub(crate) struct AtomicBlockRef<'a>(AtomicPtr<()>, PhantomData<&'a ()>);
 
-impl<'a> AtomicBlockRef<'a> {
+impl AtomicBlockRef<'_> {
     pub(crate) const fn new() -> Self {
         AtomicBlockRef(AtomicPtr::new(ptr::null_mut()), PhantomData)
     }

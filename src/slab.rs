@@ -68,7 +68,7 @@ impl<'a, B: BaseAlloc> SlabRef<'a, B> {
     }
 }
 
-impl<'a, B: BaseAlloc> Drop for SlabRef<'a, B> {
+impl<B: BaseAlloc> Drop for SlabRef<'_, B> {
     fn drop(&mut self) {
         // We only create a blank implementation to mock its unique ownership,
         // and to prevent clippy from shouting `forget_non_drop`.
@@ -226,7 +226,7 @@ struct ShardHeader<'a> {
     marker: PhantomData<&'a ()>,
 }
 
-impl<'a> ShardHeader<'a> {
+impl ShardHeader<'_> {
     const fn dangling() -> Self {
         Self {
             #[cfg(miri)]
@@ -237,7 +237,7 @@ impl<'a> ShardHeader<'a> {
     }
 }
 
-impl<'a> Default for ShardHeader<'a> {
+impl Default for ShardHeader<'_> {
     fn default() -> Self {
         Self {
             #[cfg(miri)]
