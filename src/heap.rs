@@ -818,7 +818,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let slab = unsafe { Slab::<B>::from_ptr(ptr).unwrap_unchecked() };
         let shard = unsafe { Slab::shard_meta(slab, ptr.cast()) };
 
-        let thread_id = unsafe { ptr::addr_of!((*slab.as_ptr()).thread_id).read() };
+        let thread_id = unsafe { (&raw const (*slab.as_ptr()).thread_id).read() };
         debug_assert_ne!(thread_id, 0);
 
         if self.thread_id() == thread_id {

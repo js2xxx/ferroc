@@ -10,7 +10,7 @@ use core::{
     mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ops::Deref,
-    ptr::{self, NonNull, addr_of_mut},
+    ptr::{self, NonNull},
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering::*},
 };
 
@@ -153,10 +153,10 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
     /// `ptr` must be a pointer within the range of `this`.
     pub(crate) unsafe fn shard_meta(this: NonNull<Self>, ptr: NonNull<()>) -> NonNull<Shard<'a>> {
         // SAFETY: `ptr` is within the range of `this`.
-        let shards = unsafe { ptr::addr_of!((*this.as_ptr()).shards) };
+        let shards = unsafe { &raw const (*this.as_ptr()).shards };
         let index = (ptr.addr().get() - this.addr().get()) / SHARD_SIZE;
         let shard = unsafe { shards.cast::<Shard<'a>>().add(index) };
-        let primary_offset = unsafe { (*ptr::addr_of!((*shard).primary_offset)).get() };
+        let primary_offset = unsafe { (*shard).primary_offset.get() };
         let primary_shard = unsafe { shard.byte_sub(primary_offset as usize) };
         unsafe { NonNull::new_unchecked(primary_shard.cast_mut()) }
     }
@@ -179,17 +179,14 @@ impl<'a, B: BaseAlloc> Slab<'a, B> {
 
         // SAFETY: `ptr` is fresh allocated and unique.
         unsafe {
-            addr_of_mut!((*slab).thread_id).write(thread_id);
-            addr_of_mut!((*slab).source).write(source);
-            addr_of_mut!((*slab).size).write(ptr.len());
-            addr_of_mut!((*slab).used).write(Cell::new(0));
-            addr_of_mut!((*slab).abandoned).write(Cell::new(0));
+            (&raw mut (*slab).thread_id).write(thread_id);
+            (&raw mut (*slab).source).write(source);
+            (&raw mut (*slab).size).write(ptr.len());
+            (&raw mut (*slab).used).write(Cell::new(0));
+            (&raw mut (*slab).abandoned).write(Cell::new(0));
 
-            let shards: &mut [MaybeUninit<Shard<'a>>; SHARD_COUNT] = mem::transmute(
-                addr_of_mut!((*slab).shards)
-                    .as_uninit_mut()
-                    .unwrap_unchecked(),
-            );
+            let shards: &mut [MaybeUninit<Shard<'a>>; SHARD_COUNT] =
+                mem::transmute((&raw mut (*slab).shards).as_uninit_mut().unwrap_unchecked());
 
             let (first, rest) = shards[Self::HEADER_COUNT..]
                 .split_first_mut()
@@ -314,7 +311,7 @@ impl ShardFlags {
 
     #[inline(always)]
     unsafe fn raw_get(this: *const Self) -> u8 {
-        unsafe { (*ptr::addr_of!((*this).0)).get() }
+        unsafe { (*this).0.get() }
     }
 
     #[inline(always)]
@@ -342,7 +339,7 @@ impl ShardFlags {
 
     #[inline(always)]
     unsafe fn raw_get(this: *const Self) -> u8 {
-        unsafe { (*ptr::addr_of!((*this).0)).load(Relaxed) }
+        unsafe { (*this).0.load(Relaxed) }
     }
 
     #[inline(always)]
@@ -475,7 +472,7 @@ impl<'a> Shard<'a> {
     }
 
     pub(crate) unsafe fn obj_size_raw(this: NonNull<Self>) -> usize {
-        unsafe { (*ptr::addr_of!((*this.as_ptr()).obj_size)).load(Relaxed) }
+        unsafe { (*this.as_ptr()).obj_size.load(Relaxed) }
     }
 
     /// # Safety
@@ -615,7 +612,7 @@ impl<'a> Shard<'a> {
     pub(crate) unsafe fn push_block_mt(this: NonNull<Self>, mut block: BlockRef<'a>) {
         // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
         // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
-        let thread_free = unsafe { &*ptr::addr_of!((*this.as_ptr()).thread_free) }.get();
+        let thread_free = unsafe { &(*this.as_ptr()).thread_free }.get();
 
         let mut cur = thread_free.load(Relaxed);
         let mut delayed;
@@ -638,8 +635,7 @@ impl<'a> Shard<'a> {
         if delayed {
             // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
             // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
-            let delayed_free =
-                unsafe { (*ptr::addr_of!((*this.as_ptr()).delayed_free)).load(Acquire) };
+            let delayed_free = unsafe { (*this.as_ptr()).delayed_free.load(Acquire) };
             debug_assert!(!delayed_free.is_null());
             // SAFETY: The heap of this shard will wait for `OCCUPIED` -> `NEVER` before its
             // drop.
@@ -762,13 +758,13 @@ impl<'a> Shard<'a> {
     pub(crate) unsafe fn block_of(this: NonNull<Self>, ptr: NonNull<()>) -> BlockRef<'a> {
         // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
         // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
-        let ptr = if !unsafe { ShardFlags::has_aligned(ptr::addr_of!((*this.as_ptr()).flags)) } {
+        let ptr = if !unsafe { ShardFlags::has_aligned(&raw const (*this.as_ptr()).flags) } {
             ptr
         } else {
             // SAFETY: `this` is valid.
             let obj_size = unsafe { Shard::obj_size_raw(this) };
             // SAFETY: `this` is valid.
-            let area = unsafe { ptr::read(ptr::addr_of!((*this.as_ptr()).header.shard_area)) };
+            let area = unsafe { ptr::read(&raw const (*this.as_ptr()).header.shard_area) };
 
             area.cast::<()>().map_addr(|addr| {
                 let offset = ptr.addr().get() - addr.get();
