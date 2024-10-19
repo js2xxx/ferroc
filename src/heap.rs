@@ -390,10 +390,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             return Some(Self::post_alloc(block, size, zero, shard));
         }
 
-        let heap = if self.is_init() { self } else { fallback()? };
-        debug_assert!(heap.is_init());
-        // SAFETY: Heap is initialized.
-        unsafe { heap.pop_contended(size, zero) }
+        // SAFETY: `fallback` returns an initialized heap.
+        unsafe { self.pop_contended(size, zero, fallback) }
     }
 
     /// # Safety
@@ -474,27 +472,37 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
     /// # Safety
     ///
-    /// `cx` must be initialized.
+    /// `fallback` must return an initialized heap.
     #[cold]
-    unsafe fn pop_contended(&self, size: usize, zero: bool) -> Option<NonNull<()>> {
-        self.try_free_delayed(false);
+    unsafe fn pop_contended<'a>(
+        &'a self,
+        size: usize,
+        zero: bool,
+        fallback: impl FnOnce() -> Option<&'a Self>,
+    ) -> Option<NonNull<()>> {
+        let heap = if self.is_init() { self } else { fallback()? };
+
+        debug_assert!(heap.is_init());
+        // `heap` is initialized from now on.
+
+        heap.try_free_delayed(false);
 
         if size > ObjSizeType::LARGE_MAX {
             // SAFETY: The heap is initialized.
-            return unsafe { self.pop_huge(size, zero) };
+            return unsafe { heap.pop_huge(size, zero) };
         }
 
         let index = obj_size_index(size);
         debug_assert!(index < OBJ_SIZE_COUNT);
-        let bin = unsafe { self.shards.get_unchecked(index) };
+        let bin = unsafe { heap.shards.get_unchecked(index) };
 
         // SAFETY: `cx` is initialized.
-        let shard = if let Some(shard) = unsafe { self.find_free(bin, true) } {
+        let shard = if let Some(shard) = unsafe { heap.find_free(bin, true) } {
             shard
         } else {
-            self.collect_cold();
+            heap.collect_cold();
             // SAFETY: `cx` is initialized.
-            unsafe { self.find_free(bin, false) }?
+            unsafe { heap.find_free(bin, false) }?
         };
 
         // SAFETY: `shard` has free blocks.

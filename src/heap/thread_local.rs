@@ -194,9 +194,15 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     ///
     /// # Safety
     ///
-    /// `id` must be unique with each live thread regarding only this structure
-    /// and may or may not be recycled.
-    pub unsafe fn get(self: Pin<&Self>, id: NonZeroU64) -> Pin<&Heap<'arena, '_, B>> {
+    /// - `id` must be previously [assign]ed.
+    /// - `id` must be associated with its live thread assigner regarding only
+    ///   this structure and may or may not be recycled.
+    ///
+    /// [assign]: ThreadLocal::assign
+    pub unsafe fn get(self: Pin<&Self>, id: u64) -> Pin<&Heap<'arena, '_, B>> {
+        let Some(id) = NonZeroU64::new(id) else {
+            return unsafe { Pin::new_unchecked(&(*self.main.get()).assume_init_ref().heap) };
+        };
         let bi = BucketIndex::from_id(id);
         // SAFETY: Any data is not moved.
         unsafe {
