@@ -169,7 +169,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
             main: UnsafeCell::new(MaybeUninit::uninit()),
             buckets: [Bucket::NEW; BUCKETS],
             next_reclaimed_id: AtomicU64::new(0),
-            next_id: AtomicU64::new(1),
+            next_id: AtomicU64::new(0),
             _marker: PhantomPinned,
         }
     }
