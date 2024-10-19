@@ -136,7 +136,6 @@
 #![warn(missing_docs)]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
-#![feature(const_pin)]
 #![feature(let_chains)]
 #![feature(pointer_is_aligned_to)]
 #![feature(ptr_as_uninit)]
@@ -149,7 +148,7 @@
 #![cfg_attr(feature = "global", feature(allow_internal_unsafe))]
 #![cfg_attr(feature = "global", feature(allow_internal_unstable))]
 
-#[cfg(any(test, miri, feature = "base-mmap"))]
+#[cfg(any(test, miri))]
 extern crate std;
 
 #[cfg(feature = "c")]
@@ -178,8 +177,7 @@ mod cpp;
 pub mod global;
 pub mod heap;
 mod slab;
-#[doc(hidden)]
-pub mod track;
+mod track;
 
 /// Configured constants for all the data structures.
 pub mod config {

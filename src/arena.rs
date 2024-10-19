@@ -555,7 +555,7 @@ pub enum Error<B: BaseAlloc> {
 }
 
 #[cfg(feature = "base-mmap")]
-const _: [(); mem::needs_drop::<Error<crate::base::Mmap>>() as usize] = [];
+const _: () = assert!(!mem::needs_drop::<Error<crate::base::Mmap>>());
 
 impl<B: BaseAlloc> core::fmt::Display for Error<B>
 where

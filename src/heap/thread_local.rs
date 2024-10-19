@@ -182,7 +182,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     pub const fn empty_heap<'a>(self: Pin<&'a Self>) -> Pin<&'a Heap<'arena, 'a, B>> {
         // SAFETY: The empty heap is immutable.
         unsafe {
-            let pointer = Pin::into_inner_unchecked(self);
+            let pointer = Pin::get_ref(self);
             let new_pointer = &pointer.empty_heap;
             Pin::new_unchecked(new_pointer)
         }
