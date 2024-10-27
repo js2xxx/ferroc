@@ -117,7 +117,7 @@ message(STATUS "Building shared library: ${SHARED_LIB}")
 
 set(RUSTFLAGS "-Ztls-model=initial-exec -Cpanic=abort")
 if(CMAKE_BUILD_TYPE MATCHES ".*Deb.*")
-    set(RUSTFLAGS "${RUSTFLAGS} -Cdebuginfo=2")
+    set(RUSTFLAGS "${RUSTFLAGS} -g")
 endif()
 
 if(NOT FE_PGO_GATHER)
