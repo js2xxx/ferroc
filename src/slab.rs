@@ -480,13 +480,12 @@ impl<'a> Shard<'a> {
     /// This shard must have blocks in `free`.
     pub(crate) unsafe fn pop_block_unchecked(&self) -> BlockRef<'a> {
         debug_assert!(self.has_free());
-        // `Cell::take` should not be used due to its unconditional write to the storage
-        // place with `None`, which causes an undefined behavior of racy read-write on
-        // `EMPTY_SHARD`.
+        // `Cell::take` generates more instructions than `ptr::read`, due to its
+        // unconditional write to the storage place with `None`.
         //
-        // SAFETY: reading `None` means nothing to drop, and we cansafely branch out...
+        // SAFETY: reading `None` means nothing to drop, and we can safely unwrap out...
         let mut block = unsafe { ptr::read(self.free.as_ptr()).unwrap_unchecked() };
-        // SAFETY: ... while reading `Some` means we have pracically moved out the
+        // SAFETY: ... while reading `Some` means we have practically moved out the
         // ownership of this block, so we overwrite the slot with `block.take_next()`.
         unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
         self.used.set(self.used.get() + 1);
@@ -496,11 +495,11 @@ impl<'a> Shard<'a> {
     pub(crate) fn pop_block(&self) -> Option<BlockRef<'a>> {
         // `Cell::take` should not be used due to its unconditional write to the storage
         // place with `None`, which causes an undefined behavior of racy read-write on
-        // `EMPTY_SHARD`.
+        // `EMPTY_SHARD`. Additionally, it generates more instructions than `ptr::read`.
         //
-        // SAFETY: reading `None` means nothing to drop, and we cansafely branch out...
+        // SAFETY: reading `None` means nothing to drop, and we can safely branch out...
         let mut block = unsafe { ptr::read(self.free.as_ptr()) }?;
-        // SAFETY: ... while reading `Some` means we have pracically moved out the
+        // SAFETY: ... while reading `Some` means we have practically moved out the
         // ownership of this block, so we overwrite the slot with `block.take_next()`.
         unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
         self.used.set(self.used.get() + 1);
@@ -510,13 +509,13 @@ impl<'a> Shard<'a> {
     pub(crate) fn pop_block_aligned(&self, align: usize) -> Option<BlockRef<'a>> {
         // `Cell::take` should not be used due to its unconditional write to the storage
         // place with `None`, which causes an undefined behavior of racy read-write on
-        // `EMPTY_SHARD`.
+        // `EMPTY_SHARD`. Additionally, it generates more instructions than `ptr::read`.
         //
-        // SAFETY: reading `None` means nothing to drop, and we cansafely branch out...
+        // SAFETY: reading `None` means nothing to drop, and we can safely branch out...
         let mut block = unsafe { ptr::read(self.free.as_ptr()) }?;
         if block.as_ptr().is_aligned_to(align) {
-            // SAFETY: ... while reading `Some` and successfully veritying the block means
-            // we have pracically moved out the ownership of it, so we overwrite the slot
+            // SAFETY: ... while reading `Some` and successfully verifying the block means
+            // we have practically moved out the ownership of it, so we overwrite the slot
             // with `block.take_next()`...
             unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
             self.used.set(self.used.get() + 1);
@@ -532,7 +531,7 @@ impl<'a> Shard<'a> {
     ///
     /// `true` if this shard is unused after the deallocation.
     pub(crate) fn push_block(&self, mut block: BlockRef<'a>) -> bool {
-        // `Cell::take` + `Cell::get` generates more operations.
+        // `Cell::take` + `Cell::set` generates more operations.
         unsafe {
             block.set_next(ptr::read(self.local_free.as_ptr()));
             ptr::write(self.local_free.as_ptr(), Some(block));
@@ -585,9 +584,13 @@ impl<'a> Shard<'a> {
     }
 }
 
+// Indicates to push the freed block to the heapwise delayed free list.
 const VACANT: u8 = 0;
+// Indicates that the thread free list is currently in use.
 const OCCUPIED: u8 = 1;
+// Indicates to push the freed block to the thread free list.
 const SATURATED: u8 = 2;
+// Same as `SATURATED`, while disabling resetting it to other tags.
 const NEVER: u8 = 3;
 const TAG_MASK: usize = 3;
 
