@@ -162,7 +162,10 @@ impl<B: BaseAlloc> Arena<B> {
         // SAFETY: `idx` and `bit` is valid, and thus `offset` is within the chunk
         // memory range.
         let data = unsafe { self.chunk.pointer().byte_add(offset) };
-        Some(NonNull::from_raw_parts(data.cast(), SLAB_SIZE * count))
+        Some(NonNull::from_raw_parts(
+            data.cast::<()>(),
+            SLAB_SIZE * count,
+        ))
     }
 
     #[cfg(debug_assertions)]

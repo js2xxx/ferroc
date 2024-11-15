@@ -166,7 +166,7 @@ impl<B: BaseAlloc> Chunk<B> {
 
     /// Retrieves the pointer of this chunk.
     pub fn pointer(&self) -> NonNull<[u8]> {
-        NonNull::from_raw_parts(self.ptr.cast(), self.layout.size())
+        NonNull::from_raw_parts(self.ptr.cast::<()>(), self.layout.size())
     }
 }
 

@@ -852,7 +852,7 @@ impl<'a> Shard<'a> {
         if !self.is_committed.replace(true) {
             let area = self.header.shard_area;
             // SAFETU: `area` is within the range of allocated slabs.
-            unsafe { base.commit(NonNull::from_raw_parts(area.cast(), usable_size)) }
+            unsafe { base.commit(NonNull::from_raw_parts(area.cast::<()>(), usable_size)) }
                 .map_err(Error::Commit)?;
         }
 
@@ -908,7 +908,7 @@ impl<'a> Shard<'a> {
         if !self.is_committed.replace(true) {
             let area = self.header.shard_area;
             // SAFETU: `area` is within the range of allocated slabs.
-            unsafe { base.commit(NonNull::from_raw_parts(area.cast(), SHARD_SIZE)) }
+            unsafe { base.commit(NonNull::from_raw_parts(area.cast::<()>(), SHARD_SIZE)) }
                 .map_err(Error::Commit)?;
         }
 
