@@ -101,7 +101,7 @@ impl Bitmap {
 
             // Check all the following bits.
             if mid_sto.iter().any(|sto| sto.load(Relaxed) != 0)
-                || end_sto.map_or(false, |sto| sto.load(Relaxed) & !(!0 << end_bit) != 0)
+                || end_sto.is_some_and(|sto| sto.load(Relaxed) & !(!0 << end_bit) != 0)
             {
                 return None;
             }
