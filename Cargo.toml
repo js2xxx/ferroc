@@ -14,7 +14,7 @@ repository = "https://github.com/Js2xxx/ferroc"
 version = "1.0.0-pre.4"
 
 [features]
-base-mmap = ["dep:memmap2", "dep:libc"]
+base-mmap = ["dep:memmap2", "dep:libc", "dep:errno"]
 base-static = []
 c = ["default"]
 c-bindgen = ["c", "dep:cbindgen"]
@@ -29,6 +29,7 @@ track-valgrind = ["dep:crabgrind"]
 [dependencies]
 array-macro = "2.1"
 crabgrind = {version = "0.1", optional = true}
+errno = {version = "0.3", optional = true}
 libc = {version = "0.2", optional = true}
 log = {version = "0.4", optional = true}
 memmap2 = {version = "0.9", optional = true}
