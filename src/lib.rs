@@ -42,7 +42,7 @@
 //! configured as you like.
 //!
 //! To do so, disable the default feature and enable the `global` feature as
-//! well as other necessary features to [configure](config) it! Take the
+//! well as other necessary features to [configure](macro@config) it! Take the
 //! embedded use case for example:
 //!
 //! ```toml
