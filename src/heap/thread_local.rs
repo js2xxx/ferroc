@@ -455,7 +455,7 @@ impl<B: BaseAlloc> Drop for ThreadLocal<'_, B> {
 /// struct and forward the (de)allocation functions to `THREAD_DATA.with(|td| /*
 /// ... */)`, thus creating a `Send` & `Sync` Allocator.
 ///
-/// **HOWEVER**, Since the [`thread_local!`](std::thread_local) macro in the
+/// **HOWEVER**, since the [`thread_local!`](std::thread_local) macro in the
 /// standard library uses allocation internally, marking the wrapped allocator
 /// above as the global allocator will result in infinite recursion. If a global
 /// allocator is desired, consider using this crate's [`config`](crate::config)
