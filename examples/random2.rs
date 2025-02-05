@@ -103,7 +103,7 @@ fn warm_up<'a, A: Allocator>(array: &mut [Option<Vec<u8, &'a A>>], a: &'a A) {
 
 fn new_vec<A: Allocator>(size: usize, a: A) -> Vec<u8, A> {
     let mut v = Vec::with_capacity_in(size, a);
-    v.extend(iter::repeat(0).take(size));
+    v.extend(iter::repeat_n(0, size));
     v
 }
 

@@ -224,7 +224,7 @@ mod test {
 
     const CHUNK_SIZE: usize = 1024;
     fn chunks(size: usize) -> impl Iterator<Item = [u8; CHUNK_SIZE]> {
-        iter::repeat([0u8; CHUNK_SIZE]).take(size / CHUNK_SIZE)
+        iter::repeat_n([0u8; CHUNK_SIZE], size / CHUNK_SIZE)
     }
 
     #[test]
@@ -257,8 +257,8 @@ mod test {
     fn multithread() {
         let j = thread::spawn(move || {
             let mut vec = Vec::new_in(Ferroc);
-            vec.extend(iter::repeat(0u8).take(100));
-            vec.extend(iter::repeat(1u8).take(100));
+            vec.extend(iter::repeat_n(0u8, 100));
+            vec.extend(iter::repeat_n(1u8, 100));
             vec
         });
         let vec = j.join().unwrap();

@@ -116,7 +116,7 @@ impl<'a, A: Allocator> Session<'a, A> {
             let iter = (0..BATCH_SIZE).map(|index| {
                 let size = 64;
                 let mut vec = Vec::with_capacity_in(size, self.alloc);
-                vec.extend(iter::repeat(index as u8).take(size.min(128)));
+                vec.extend(iter::repeat_n(index as u8, size.min(128)));
                 vec.into_boxed_slice()
             });
             let mut vec = Vec::with_capacity_in(BATCH_SIZE, self.alloc);
