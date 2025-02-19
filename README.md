@@ -84,7 +84,7 @@ fn main() {
 - `"track-valgrind"`: Valgrind memory tracking support based on [`crabgrind`](https://github.com/2dav/crabgrind), which requires Valgrind's version of at least 3.22;
 - `"finer-grained"`: Add more object size types to small bins, decreasing fragmentation but also the minimal alignment from 16 to 8, potentially leading some programs that need SIMD to fail for misalignment.
 
-## Environment variables
+## Compile-time Environment variables
 
 There are several additional configurations that can be set via environment variables to control the behavior of Ferroc:
 
