@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 arbitrary = {version = "1", features = ["derive"]}
-ctor = "0.2"
+ctor = "0.4"
 libfuzzer-sys = "0.4"
 scoped-tls = "1.0"
 
