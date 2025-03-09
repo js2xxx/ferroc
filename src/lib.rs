@@ -141,7 +141,6 @@
 #![feature(ptr_as_uninit)]
 #![feature(ptr_mask)]
 #![feature(ptr_metadata)]
-#![feature(ptr_sub_ptr)]
 #![cfg_attr(feature = "c", feature(linkage))]
 #![cfg_attr(feature = "global", allow(internal_features))]
 #![cfg_attr(feature = "global", feature(allow_internal_unsafe))]

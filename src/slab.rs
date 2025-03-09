@@ -751,7 +751,7 @@ impl<'a> Shard<'a> {
             header_slab.as_ref()
         };
         // SAFETY: `self` must reside in the `shards` array in its `Slab`.
-        let index = unsafe { ptr::from_ref(self).sub_ptr(slab.shards.as_ptr()) };
+        let index = unsafe { ptr::from_ref(self).offset_from_unsigned(slab.shards.as_ptr()) };
         (slab, index)
     }
 

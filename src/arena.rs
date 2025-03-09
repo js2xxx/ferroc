@@ -210,7 +210,10 @@ impl<B: BaseAlloc> Arena<B> {
         let raw = slab.into_raw();
         unsafe { base.decommit(raw) };
         let (ptr, len) = raw.to_raw_parts();
-        let offset = unsafe { ptr.cast::<u8>().sub_ptr(self.chunk.pointer().cast()) };
+        let offset = unsafe {
+            ptr.cast::<u8>()
+                .offset_from_unsigned(self.chunk.pointer().cast())
+        };
 
         let (start, end) = (offset / SLAB_SIZE, (offset + len) / SLAB_SIZE);
         self.bitmap().set::<false>((start as u32)..(end as u32));
