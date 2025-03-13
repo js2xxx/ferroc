@@ -536,8 +536,9 @@ impl<'a> Shard<'a> {
             block.set_next(ptr::read(self.local_free.as_ptr()));
             ptr::write(self.local_free.as_ptr(), Some(block));
         }
-        self.used.set(self.used.get() - 1);
-        self.used.get() == 0
+        let now_used = self.used.get() - 1;
+        self.used.set(now_used);
+        now_used == 0
     }
 
     pub(crate) fn collect(&self, force: bool) -> bool {
