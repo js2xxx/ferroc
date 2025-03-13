@@ -365,7 +365,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             } else {
                 unsafe { ptr_slice.as_uninit_slice_mut().fill(MaybeUninit::zeroed()) };
             }
-            debug_assert!(unsafe { ptr_slice.as_ref().iter().any(|&b| b == 0) });
+            debug_assert!(unsafe { ptr_slice.as_ref().contains(&0) });
         }
         core::mem::forget(block);
         ptr
