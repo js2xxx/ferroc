@@ -136,7 +136,6 @@
 #![warn(missing_docs)]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
-#![feature(let_chains)]
 #![feature(pointer_is_aligned_to)]
 #![feature(ptr_as_uninit)]
 #![feature(ptr_mask)]

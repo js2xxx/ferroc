@@ -200,9 +200,11 @@ impl Bitmap {
                     let (z, o) = f(sto, 0..BITS);
                     (mz || z, mo || o)
                 });
-                let (lz, lo) = (last_bit > 0)
-                    .then(|| f(&self.0[last_sto], 0..last_bit))
-                    .unwrap_or_default();
+                let (lz, lo) = if last_bit > 0 {
+                    f(&self.0[last_sto], 0..last_bit)
+                } else {
+                    Default::default()
+                };
                 (fz || mz || lz, fo || mo || lo)
             }
         }

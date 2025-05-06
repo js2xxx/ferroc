@@ -82,7 +82,7 @@ fn bench_one<'a, A: Allocator>(tid: usize, transfer: &[Mutex<Option<Items<&'a A>
         if probably(25) && !data.is_empty() {
             let di = fastrand::usize(0..data.len());
             let ti = fastrand::usize(0..transfer.len());
-            mem::swap(&mut data[di], &mut transfer[ti].lock().unwrap());
+            mem::swap(&mut data[di], &mut *transfer[ti].lock().unwrap());
         }
     }
 }

@@ -18,7 +18,7 @@ impl<'a, T: 'a + ?Sized> core::fmt::Debug for CellLink<'a, T> {
         if linked_to == 0 {
             write!(f, "CellLink (unlinked)")
         } else {
-            write!(f, "CellLink ({:#x})", linked_to)
+            write!(f, "CellLink ({linked_to:#x})")
         }
     }
 }
