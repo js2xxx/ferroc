@@ -35,7 +35,7 @@ log = {version = "0.4", optional = true}
 memmap2 = {version = "0.9", optional = true}
 
 [dev-dependencies]
-ctor = "0.2"
+ctor = "0.4"
 fastrand = "2.1"
 
 [build-dependencies]
