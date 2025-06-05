@@ -442,7 +442,7 @@ impl<B: BaseAlloc> Arenas<B> {
     }
 
     /// Retrieves the base allocator of this arena collection.
-    pub fn base(&self) -> &B {
+    pub const fn base(&self) -> &B {
         &self.base
     }
 

@@ -65,7 +65,7 @@ macro_rules! config_inner {
             ///
             /// This function forwards the call to [`Arenas::base`].
             #[inline]
-            $vis fn base(&self) -> &$bt {
+            $vis const fn base(&self) -> &$bt {
                 ARENAS.base()
             }
 
