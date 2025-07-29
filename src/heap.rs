@@ -117,6 +117,34 @@ const fn const_min(a: usize, b: usize) -> usize {
     if a < b { a } else { b }
 }
 
+struct Bin<'arena> {
+    list: ShardList<'arena>,
+    obj_size: usize,
+    min_direct_index: usize,
+    max_direct_index: usize,
+}
+
+impl Bin<'_> {
+    const fn new(index: usize) -> Self {
+        const fn const_max(a: usize, b: usize) -> usize {
+            if a > b { a } else { b }
+        }
+
+        // Bin #0 is identical to bin #1...
+        let obj_size = const_max(obj_size(index), GRANULARITY);
+        Bin {
+            list: ShardList::DEFAULT,
+            obj_size,
+            min_direct_index: if index <= 1 {
+                0 // ... so we here specify the same value for them.
+            } else {
+                direct_index(self::obj_size(index - 1)) + 1
+            },
+            max_direct_index: direct_index(obj_size),
+        }
+    }
+}
+
 /// A memory allocator context of ferroc.
 ///
 /// This structure serves as the heap storage of a specific task. It contains a
@@ -189,34 +217,6 @@ impl<B: BaseAlloc> Drop for Context<'_, B> {
         #[cfg(debug_assertions)]
         debug_assert!(self.free_shards.is_empty());
         debug_assert_eq!(self.heap_count.get(), 0);
-    }
-}
-
-struct Bin<'arena> {
-    list: ShardList<'arena>,
-    obj_size: usize,
-    min_direct_index: usize,
-    max_direct_index: usize,
-}
-
-impl Bin<'_> {
-    const fn new(index: usize) -> Self {
-        const fn const_max(a: usize, b: usize) -> usize {
-            if a > b { a } else { b }
-        }
-
-        // Bin #0 is identical to bin #1...
-        let obj_size = const_max(obj_size(index), GRANULARITY);
-        Bin {
-            list: ShardList::DEFAULT,
-            obj_size,
-            min_direct_index: if index <= 1 {
-                0 // ... so we here specify the same value for them.
-            } else {
-                direct_index(self::obj_size(index - 1)) + 1
-            },
-            max_direct_index: direct_index(obj_size),
-        }
     }
 }
 

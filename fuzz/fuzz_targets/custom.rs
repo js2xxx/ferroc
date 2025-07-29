@@ -1,6 +1,5 @@
 #![no_main]
 #![feature(allocator_api)]
-#![feature(let_chains)]
 #![feature(ptr_as_uninit)]
 #![feature(ptr_metadata)]
 
