@@ -8,7 +8,7 @@ use std::{
     iter,
     pin::pin,
     ptr::NonNull,
-    sync::{atomic::Ordering::Relaxed, Mutex},
+    sync::{Mutex, atomic::Ordering::Relaxed},
     thread,
 };
 

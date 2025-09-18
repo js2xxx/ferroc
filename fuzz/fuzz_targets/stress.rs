@@ -11,7 +11,7 @@ use std::{
     thread,
 };
 
-use ferroc::{base::BaseAlloc, Ferroc};
+use ferroc::{Ferroc, base::BaseAlloc};
 use libfuzzer_sys::fuzz_target;
 
 mod common;
