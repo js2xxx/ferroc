@@ -134,8 +134,6 @@
 #![deny(trivial_casts)]
 #![deny(trivial_numeric_casts)]
 #![warn(missing_docs)]
-#![feature(alloc_layout_extra)]
-#![feature(allocator_api)]
 #![feature(pointer_is_aligned_to)]
 #![feature(ptr_as_uninit)]
 #![feature(ptr_mask)]

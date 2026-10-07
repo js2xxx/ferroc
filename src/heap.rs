@@ -59,7 +59,7 @@ pub const fn obj_size_index(size: usize) -> usize {
             debug_assert!(ssize > 0);
             // SAFETY: ssize > 0 according to the previous branch.
             let ssize = unsafe { NonZeroUsize::new_unchecked(ssize) };
-            let sft = usize::BITS - ssize.leading_zeros() - 4;
+            let sft = ssize.bit_width().get() - 4;
             ((ssize.get() - 1) >> sft) + (sft << 3) as usize + 1
         }
     }
@@ -575,7 +575,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         fallback: impl FnOnce() -> Option<&'a Self>,
     ) -> Option<NonNull<()>> {
         if layout.size() == 0 {
-            return Some(layout.dangling().cast());
+            return Some(layout.dangling_ptr().cast());
         }
         if layout.size() <= ObjSizeType::MEDIUM_MAX && layout.size() & (layout.align() - 1) == 0 {
             // SAFETY: `fallback` returns an initialized heap.
@@ -679,7 +679,7 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         let block = unsafe { Shard::block_of(shard, ptr.cast()) };
 
         let size = obj_size - (ptr.addr().get() - block.into_raw().addr().get());
-        let align = 1 << ptr.addr().get().trailing_zeros();
+        let align = 1 << ptr.addr().trailing_zeros();
         Layout::from_size_align(size, align).unwrap()
     }
 

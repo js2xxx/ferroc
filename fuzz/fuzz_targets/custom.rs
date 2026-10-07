@@ -1,5 +1,4 @@
 #![no_main]
-#![feature(allocator_api)]
 #![feature(ptr_as_uninit)]
 #![feature(ptr_metadata)]
 

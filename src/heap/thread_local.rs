@@ -277,7 +277,7 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
         loop {
             let Some(ret) = NonZeroU64::new(id) else {
                 const MAX_ID: u64 = i64::MAX as u64;
-                const SATURATED_ID: u64 = (MAX_ID & u64::MAX) + ((MAX_ID ^ u64::MAX) >> 1);
+                const SATURATED_ID: u64 = MAX_ID + ((MAX_ID ^ u64::MAX) >> 1);
 
                 match self.next_id.fetch_add(1, Relaxed) {
                     MAX_ID.. => {
@@ -519,7 +519,7 @@ impl<'t, 'arena: 't, B: BaseAlloc> ThreadData<'t, 'arena, B> {
     /// See [`Heap::deallocate`] for more information.
     pub unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         // SAFETY: The pointer is valid for `layout`.
-        unsafe { self.heap.get().deallocate(ptr, layout) }
+        unsafe { (*self.heap.get()).deallocate(ptr, layout) }
     }
 }
 

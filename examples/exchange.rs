@@ -1,5 +1,4 @@
 //! Ported from `xmalloc-test`.
-#![feature(allocator_api)]
 
 use std::{
     alloc::Allocator,
