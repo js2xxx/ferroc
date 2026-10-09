@@ -12,7 +12,7 @@ ferroc::config!(pub Custom(&STATIC) => &'static Static::<HEADER_CAP, true>);
 #[global_allocator]
 static CUSTOM: Custom = Custom;
 
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn load_memory() {
     #[repr(align(4194304))]
     struct Memory(UnsafeCell<[usize; 1024]>);

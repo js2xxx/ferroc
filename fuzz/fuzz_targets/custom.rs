@@ -22,7 +22,7 @@ static STATIC: Static<HEADER_CAP> = Static::new();
 ferroc::config_mod!(custom: pub Custom(&STATIC) => &'static Static::<HEADER_CAP>);
 use custom::{Chunk, Custom};
 
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn load_memory() {
     use core::cell::UnsafeCell;
 

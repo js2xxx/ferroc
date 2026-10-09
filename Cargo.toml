@@ -1,52 +1,52 @@
 [package]
 authors = ["Js2xxx <akucxy@163.com>"]
 build = "build.rs"
-categories = ["memory-management", "no-std", "concurrency"]
+categories = ["concurrency", "memory-management", "no-std"]
 description = "A fast & lock-free memory allocator library"
 documentation = "https://docs.rs/ferroc"
 edition = "2024"
 exclude = ["assets"]
 homepage = "https://github.com/Js2xxx/ferroc"
-keywords = ["allocator", "no_std", "memory", "heap", "lock-free"]
+keywords = ["allocator", "heap", "lock-free", "memory", "no_std"]
 license = "MIT OR Apache-2.0"
 name = "ferroc"
 repository = "https://github.com/Js2xxx/ferroc"
 version = "1.0.0-pre.5"
 
+[workspace]
+resolver = "2"
+members = ["fuzz"]
+exclude = ["target"]
+
+[dependencies]
+array-macro = "2.1"
+crabgrind = { version = "0.1", optional = true }
+errno = { version = "0.3", optional = true }
+libc = { version = "0.2", optional = true }
+log = { version = "0.4", optional = true }
+memmap2 = { version = "0.9", optional = true }
+
+[dev-dependencies]
+ctor = "1.0"
+fastrand = "2.1"
+
+[build-dependencies]
+cbindgen = { version = "0.29", optional = true }
+
 [features]
-base-mmap = ["dep:memmap2", "dep:libc", "dep:errno"]
+default = ["base-mmap", "base-static", "global", "libc"]
+base-mmap = ["dep:errno", "dep:libc", "dep:memmap2"]
 base-static = []
 c = ["default"]
 c-bindgen = ["c", "dep:cbindgen"]
 c-override = ["c"]
-default = ["global", "base-mmap", "base-static", "libc"]
 error-log = ["dep:log"]
 finer-grained = []
 global = []
 libc = ["dep:libc"]
 track-valgrind = ["dep:crabgrind"]
 
-[dependencies]
-array-macro = "2.1"
-crabgrind = {version = "0.1", optional = true}
-errno = {version = "0.3", optional = true}
-libc = {version = "0.2", optional = true}
-log = {version = "0.4", optional = true}
-memmap2 = {version = "0.9", optional = true}
-
-[dev-dependencies]
-ctor = "0.2"
-fastrand = "2.1"
-
-[build-dependencies]
-cbindgen = {version = "0.27", optional = true}
-
 [profile.release]
-codegen-units = 1
 lto = true
 panic = "abort"
-
-[workspace]
-exclude = ["target"]
-members = ["fuzz"]
-resolver = "2"
+codegen-units = 1
