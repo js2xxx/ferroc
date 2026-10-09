@@ -73,8 +73,8 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
         #[cfg(debug_assertions)]
         value.link().linked_to.set(ptr::from_ref(self).addr());
 
-        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it must be
-        // replaced with a `take`.
+        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it
+        // must be replaced with a `take`.
         let next = self.head.get();
         value.link().next.set(next);
         match next {
@@ -92,8 +92,8 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
         #[cfg(debug_assertions)]
         self.len.set(self.len.get() - 1);
 
-        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it must be
-        // replaced with a `take`.
+        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it
+        // must be replaced with a `take`.
         let next = value.link().next.take();
         match next {
             Some(next) => next.link().prev.set(None),
@@ -117,8 +117,8 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
         #[cfg(debug_assertions)]
         self.len.set(self.len.get() - 1);
 
-        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it must be
-        // replaced with a `take`.
+        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it
+        // must be replaced with a `take`.
         let prev = value.link().prev.take();
         let next = value.link().next.take();
         match prev {
@@ -144,8 +144,8 @@ impl<'a, T: CellLinked<'a>> CellList<'a, T> {
         #[cfg(debug_assertions)]
         value.link().linked_to.set(ptr::from_ref(other).addr());
 
-        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it must be
-        // replaced with a `take`.
+        // INVARIANT: A link's `get` must be paired with a `set`, otherwise it
+        // must be replaced with a `take`.
         let new_next = other.head.get();
 
         let last_prev = value.link().prev.take();

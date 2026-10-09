@@ -483,45 +483,53 @@ impl<'a> Shard<'a> {
         // `Cell::take` generates more instructions than `ptr::read`, due to its
         // unconditional write to the storage place with `None`.
         //
-        // SAFETY: reading `None` means nothing to drop, and we can safely unwrap out...
+        // SAFETY: reading `None` means nothing to drop, and we can safely
+        // unwrap out...
         let mut block = unsafe { ptr::read(self.free.as_ptr()).unwrap_unchecked() };
-        // SAFETY: ... while reading `Some` means we have practically moved out the
-        // ownership of this block, so we overwrite the slot with `block.take_next()`.
+        // SAFETY: ... while reading `Some` means we have practically moved out
+        // the ownership of this block, so we overwrite the slot with
+        // `block.take_next()`.
         unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
         self.used.set(self.used.get() + 1);
         block
     }
 
     pub(crate) fn pop_block(&self) -> Option<BlockRef<'a>> {
-        // `Cell::take` should not be used due to its unconditional write to the storage
-        // place with `None`, which causes an undefined behavior of racy read-write on
-        // `EMPTY_SHARD`. Additionally, it generates more instructions than `ptr::read`.
+        // `Cell::take` should not be used due to its unconditional write to the
+        // storage place with `None`, which causes an undefined behavior of racy
+        // read-write on `EMPTY_SHARD`. Additionally, it generates more
+        // instructions than `ptr::read`.
         //
-        // SAFETY: reading `None` means nothing to drop, and we can safely branch out...
+        // SAFETY: reading `None` means nothing to drop, and we can safely
+        // branch out...
         let mut block = unsafe { ptr::read(self.free.as_ptr()) }?;
-        // SAFETY: ... while reading `Some` means we have practically moved out the
-        // ownership of this block, so we overwrite the slot with `block.take_next()`.
+        // SAFETY: ... while reading `Some` means we have practically moved out
+        // the ownership of this block, so we overwrite the slot with
+        // `block.take_next()`.
         unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
         self.used.set(self.used.get() + 1);
         Some(block)
     }
 
     pub(crate) fn pop_block_aligned(&self, align: usize) -> Option<BlockRef<'a>> {
-        // `Cell::take` should not be used due to its unconditional write to the storage
-        // place with `None`, which causes an undefined behavior of racy read-write on
-        // `EMPTY_SHARD`. Additionally, it generates more instructions than `ptr::read`.
+        // `Cell::take` should not be used due to its unconditional write to the
+        // storage place with `None`, which causes an undefined behavior of racy
+        // read-write on `EMPTY_SHARD`. Additionally, it generates more
+        // instructions than `ptr::read`.
         //
-        // SAFETY: reading `None` means nothing to drop, and we can safely branch out...
+        // SAFETY: reading `None` means nothing to drop, and we can safely
+        // branch out...
         let mut block = unsafe { ptr::read(self.free.as_ptr()) }?;
         if block.as_ptr().is_aligned_to(align) {
-            // SAFETY: ... while reading `Some` and successfully verifying the block means
-            // we have practically moved out the ownership of it, so we overwrite the slot
-            // with `block.take_next()`...
+            // SAFETY: ... while reading `Some` and successfully verifying the
+            // block means we have practically moved out the ownership of it, so
+            // we overwrite the slot with `block.take_next()`...
             unsafe { ptr::write(self.free.as_ptr(), block.take_next()) };
             self.used.set(self.used.get() + 1);
             Some(block)
         } else {
-            // ... and an unverified block should not be moved out, so we simply forget it.
+            // ... and an unverified block should not be moved out, so we simply
+            // forget it.
             mem::forget(block);
             None
         }
@@ -542,15 +550,17 @@ impl<'a> Shard<'a> {
     }
 
     pub(crate) fn collect(&self, force: bool) -> bool {
-        // `is_null()` is equivalent to `cur_tag == VACANT && cur_ptr.is_none()`.
+        // `is_null()` is equivalent to `cur_tag == VACANT &&
+        // cur_ptr.is_none()`.
         //
-        // If the current tag is VACANT, any deallocations will be freeing on the
-        // heapwise delayed free list instead of this thread free list, which means
-        // exactly `cur_ptr.is_none()`.
+        // If the current tag is VACANT, any deallocations will be freeing on
+        // the heapwise delayed free list instead of this thread free list,
+        // which means exactly `cur_ptr.is_none()`.
         //
-        // Changing it to `Self::decompose_mt` will add instructions to hot paths while
-        // the actual check will be performed in `collect_thread_free` unconditionally,
-        // which means little benefit. Thus, the decomposition should not be done here.
+        // Changing it to `Self::decompose_mt` will add instructions to hot
+        // paths while the actual check will be performed in
+        // `collect_thread_free` unconditionally, which means little benefit.
+        // Thus, the decomposition should not be done here.
         if force || !self.thread_free.get().load(Relaxed).is_null() {
             self.collect_thread_free();
         }
@@ -558,8 +568,8 @@ impl<'a> Shard<'a> {
         let local_free = self.local_free.as_ptr();
         let free = self.free.as_ptr();
 
-        // SAFETY: We do the same trick in `self.pop_block` to prevent unconditional
-        // writes.
+        // SAFETY: We do the same trick in `self.pop_block` to prevent
+        // unconditional writes.
         unsafe {
             match (ptr::read(local_free), ptr::read(free)) {
                 (Some(lfree), None) => {
@@ -615,7 +625,8 @@ impl<'a> Shard<'a> {
     /// `this` must point to a valid `Shard<'a>` without any mutable reference.
     pub(crate) unsafe fn push_block_mt(this: NonNull<Self>, mut block: BlockRef<'a>) {
         // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
-        // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
+        // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid
+        // references.
         let thread_free = unsafe { &(*this.as_ptr()).thread_free }.get();
 
         let mut cur = thread_free.load(Relaxed);
@@ -637,12 +648,13 @@ impl<'a> Shard<'a> {
         }
 
         if delayed {
-            // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
-            // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
+            // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any
+            // thread. FIXME: Use `atomic_load(*const T, Ordering) -> T` to
+            // avoid references.
             let delayed_free = unsafe { (*this.as_ptr()).delayed_free.load(Acquire) };
             debug_assert!(!delayed_free.is_null());
-            // SAFETY: The heap of this shard will wait for `OCCUPIED` -> `NEVER` before its
-            // drop.
+            // SAFETY: The heap of this shard will wait for `OCCUPIED` ->
+            // `NEVER` before its drop.
             let delayed_free = unsafe { (*delayed_free).get() };
 
             let mut cur = delayed_free.load(Relaxed);
@@ -718,7 +730,8 @@ impl<'a> Shard<'a> {
                 Acquire,
             ) {
                 Ok(_) => {
-                    // SAFETY: Every pointer residing in `thread_free` points to a valid block.
+                    // SAFETY: Every pointer residing in `thread_free` points to
+                    // a valid block.
                     let mut thread_free = unsafe { BlockRef::from_raw(nn) };
 
                     let count = thread_free.set_tail(self.local_free.take());
@@ -739,9 +752,9 @@ impl<'a> Shard<'a> {
     pub(crate) unsafe fn slab<B: BaseAlloc>(&self) -> (&'a Slab<'a, B>, usize) {
         // SAFETY: A shard cannot be manually used on the stack.
         //
-        // Every shard only associates with one slab, which resides exactly on the
-        // address by pointer arithmetics. Miri doesn't recognize this, so we provide it
-        // with additional provenance information.
+        // Every shard only associates with one slab, which resides exactly on
+        // the address by pointer arithmetics. Miri doesn't recognize this, so
+        // we provide it with additional provenance information.
         let slab = unsafe { Slab::from_ptr(self.into()).unwrap_unchecked() };
         #[cfg(not(miri))]
         let slab = unsafe { slab.as_ref() };
@@ -761,7 +774,8 @@ impl<'a> Shard<'a> {
     /// `ptr` must be a pointer within the range of `this`.
     pub(crate) unsafe fn block_of(this: NonNull<Self>, ptr: NonNull<()>) -> BlockRef<'a> {
         // SAFETY: `AtomicUsize` is `Sync`, so we can load it from any thread.
-        // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid references.
+        // FIXME: Use `atomic_load(*const T, Ordering) -> T` to avoid
+        // references.
         let ptr = if !unsafe { ShardFlags::has_aligned(&raw const (*this.as_ptr()).flags) } {
             ptr
         } else {
@@ -772,8 +786,8 @@ impl<'a> Shard<'a> {
 
             area.cast::<()>().map_addr(|addr| {
                 let offset = ptr.addr().get() - addr.get();
-                // SAFETY: `addr` is not zero, and offset is decreased, so the result is not
-                // zero.
+                // SAFETY: `addr` is not zero, and offset is decreased, so the
+                // result is not zero.
                 unsafe { NonZeroUsize::new_unchecked(addr.get() + (offset - offset % obj_size)) }
             })
         };
@@ -795,7 +809,8 @@ impl<'a> Shard<'a> {
         debug_assert!(capacity + count <= cap_limit);
 
         let area = self.header.shard_area;
-        // SAFETY: the `area` is owned by this shard in a similar way to `Cell<[u8]>`.
+        // SAFETY: the `area` is owned by this shard in a similar way to
+        // `Cell<[u8]>`.
         let iter = (capacity..capacity + count)
             .map(|index| unsafe { BlockRef::new(area.add(index * obj_size).cast()) });
 

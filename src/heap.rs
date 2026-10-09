@@ -446,9 +446,10 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         }
 
         // 2. Try to collect & unfull some shards (freed from other threads);
-        // However, full shards will be unfulled when `try_free_delayed` is called, so
-        // we don't iterate and unfull it here. Keeping that list simply prevents full
-        // shards being iterated everytime on the loop above.
+        // However, full shards will be unfulled when `try_free_delayed` is
+        // called, so we don't iterate and unfull it here. Keeping that list
+        // simply prevents full shards being iterated everytime on the loop
+        // above.
 
         // 3. Try to allocate/reclaim a slab.
         let new = stry!(cx.alloc_slab(NonZeroUsize::MIN, 1, !first_try));
@@ -670,7 +671,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         {
             unreachable!("{ptr:p} is not allocated from these arenas");
         }
-        // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
+        // SAFETY: We don't obtain the actual reference of it, as slabs aren't
+        // `Sync`.
         let slab = unsafe { Slab::<B>::from_ptr(ptr).unwrap_unchecked() };
         // SAFETY: The same as `Slab::from_ptr`.
         let shard = unsafe { Slab::shard_meta(slab, ptr.cast()) };
@@ -730,7 +732,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         debug_assert_eq!(obj_size, shard.obj_size.load(Relaxed));
         if obj_size <= ObjSizeType::LARGE_MAX {
             let index = obj_size_index(obj_size);
-            // SAFETY: layout.size() <= ObjSizeType::LARGE_MAX means index < OBJ_SIZE_COUNT.
+            // SAFETY: layout.size() <= ObjSizeType::LARGE_MAX means index <
+            // OBJ_SIZE_COUNT.
             let bin = unsafe { self.shards.get_unchecked(index) };
 
             if !bin.list.has_sole_member() {
@@ -771,7 +774,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             let next = block.take_next();
 
             let ptr = block.as_ptr();
-            // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
+            // SAFETY: We don't obtain the actual reference of it, as slabs
+            // aren't `Sync`.
             let slab = unsafe { Slab::<B>::from_ptr(ptr).unwrap_unchecked() };
             // SAFETY: The block is ours, and so is this shard.
             let shard = unsafe { Slab::shard_meta(slab, ptr.cast()).as_ref() };
@@ -822,7 +826,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
             unreachable!("{ptr:p} is not allocated from these arenas");
         }
 
-        // SAFETY: We don't obtain the actual reference of it, as slabs aren't `Sync`.
+        // SAFETY: We don't obtain the actual reference of it, as slabs aren't
+        // `Sync`.
         let slab = unsafe { Slab::<B>::from_ptr(ptr).unwrap_unchecked() };
         let shard = unsafe { Slab::shard_meta(slab, ptr.cast()) };
 
@@ -831,15 +836,16 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
 
         if self.thread_id() == thread_id {
             // SAFETY: We're in the same thread.
-            // NOTE: Currently there's only one heap per thread, so we don't need to check
-            // the belonged heap.
+            // NOTE: Currently there's only one heap per thread, so we don't
+            // need to check the belonged heap.
             let shard = unsafe { shard.as_ref() };
             if shard.flags.test_zero() {
                 track::deallocate(ptr, 0);
 
                 // SAFETY: flags is zero, this shard has no aligned blocks.
                 if shard.push_block(unsafe { BlockRef::from_raw(ptr.cast()) }) {
-                    // SAFETY: `cx` is initialized to have performed the allocation above.
+                    // SAFETY: `cx` is initialized to have performed the
+                    // allocation above.
                     unsafe { self.free_shard(shard, shard.obj_size.load(Relaxed)) }
                 }
             } else {
@@ -863,7 +869,8 @@ impl<'arena: 'cx, 'cx, B: BaseAlloc> Heap<'arena, 'cx, B> {
         if is_local {
             let shard = unsafe { shard.as_ref() };
 
-            // SAFETY: `cx` is initialized to have performed the allocation above.
+            // SAFETY: `cx` is initialized to have performed the allocation
+            // above.
             unsafe { self.free_block(shard, block) };
         } else {
             // We're deallocating from another thread.

@@ -83,7 +83,8 @@ impl<B: BaseAlloc> Arena<B> {
         };
 
         if !is_exclusive {
-            // SAFETY: the bitmap pointer points to a valid & uninit memory block.
+            // SAFETY: the bitmap pointer points to a valid & uninit memory
+            // block.
             unsafe {
                 let maybe = arena.bitmap_ptr().as_uninit_slice_mut();
                 maybe.fill(MaybeUninit::new(0));
@@ -132,7 +133,8 @@ impl<B: BaseAlloc> Arena<B> {
     ///
     /// `arena` must have no other references alive.
     unsafe fn drop(arena: NonNull<Self>) {
-        // SAFETY: We read the data first so as to avoid dropping the dropped data.
+        // SAFETY: We read the data first so as to avoid dropping the dropped
+        // data.
         drop(unsafe { arena.read() });
     }
 
@@ -159,8 +161,8 @@ impl<B: BaseAlloc> Arena<B> {
         self.search_index.store(idx, Relaxed);
 
         let offset = (idx * BYTE_WIDTH + (bit as usize)) * SLAB_SIZE;
-        // SAFETY: `idx` and `bit` is valid, and thus `offset` is within the chunk
-        // memory range.
+        // SAFETY: `idx` and `bit` is valid, and thus `offset` is within the
+        // chunk memory range.
         let data = unsafe { self.chunk.pointer().byte_add(offset) };
         Some(NonNull::from_raw_parts(
             data.cast::<()>(),
@@ -238,8 +240,8 @@ pub struct Arenas<B: BaseAlloc> {
 }
 
 impl<B: BaseAlloc> Arenas<B> {
-    // We're using this constant to initialize the array, so no real manipulation on
-    // this constant is performed.
+    // We're using this constant to initialize the array, so no real
+    // manipulation on this constant is performed.
     #[allow(clippy::declare_interior_mutable_const)]
     const ARENA_INIT: AtomicPtr<Arena<B>> = AtomicPtr::new(ptr::null_mut());
 
@@ -521,8 +523,9 @@ impl<B: BaseAlloc> Arenas<B> {
                 &SlabSource::Arena(id) => {
                     let arena = self.arenas[id.get() - 1].load(Acquire);
                     debug_assert!(!arena.is_null());
-                    // SAFETY: `arena` is obtained from the unique `arena_id`, and the arena won't
-                    // be dropped as long as any allocation from it is alive.
+                    // SAFETY: `arena` is obtained from the unique `arena_id`,
+                    // and the arena won't be dropped as long as any allocation
+                    // from it is alive.
                     let _slab_count = unsafe { (*arena).deallocate(slab, &self.base) };
                 }
                 SlabSource::Base { chunk } => {

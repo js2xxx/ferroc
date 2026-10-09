@@ -23,9 +23,9 @@ impl Mmap {
 unsafe impl BaseAlloc for Mmap {
     const IS_ZEROED: bool = true;
 
-    // The inner type of `Errno` is `i32`, which is incompatible for UEFI targets.
-    // However, the `mmap` functionalities aren't available on UEFI either, so this
-    // should be fine.
+    // The inner type of `Errno` is `i32`, which is incompatible for UEFI
+    // targets. However, the `mmap` functionalities aren't available on UEFI
+    // either, so this should be fine.
     type Error = errno::Errno;
 
     type Handle = ManuallyDrop<MmapMut>;

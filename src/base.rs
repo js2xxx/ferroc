@@ -172,8 +172,8 @@ impl<B: BaseAlloc> Chunk<B> {
 
 impl<B: BaseAlloc> Drop for Chunk<B> {
     fn drop(&mut self) {
-        // SAFETY: `chunk` points to a valid & owned memory block containing `layout`,
-        // previously allocated by this allocator.
+        // SAFETY: `chunk` points to a valid & owned memory block containing
+        // `layout`, previously allocated by this allocator.
         unsafe { B::deallocate(self) }
     }
 }

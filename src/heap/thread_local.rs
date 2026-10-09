@@ -53,8 +53,8 @@ struct Entry<'arena, B: BaseAlloc> {
 
 impl<B: BaseAlloc> Drop for Entry<'_, B> {
     fn drop(&mut self) {
-        // SAFETY: The drop order should be explicitly specified: The heap should be
-        // dropped before the context.
+        // SAFETY: The drop order should be explicitly specified: The heap
+        // should be dropped before the context.
         unsafe {
             ManuallyDrop::drop(&mut self.heap);
             ManuallyDrop::drop(&mut self.cx);
@@ -93,8 +93,8 @@ impl<'arena, B: BaseAlloc> Bucket<'arena, B> {
         };
         let mut bucket = chunk.pointer().cast::<Entry<'arena, B>>();
         for _ in 0..bi.bucket_count {
-            // SAFETY: All `bucket`s are within the range of the previously allocated chunk,
-            // for its layout is calculated before.
+            // SAFETY: All `bucket`s are within the range of the previously
+            // allocated chunk, for its layout is calculated before.
             unsafe {
                 let td = bucket.as_uninit_mut();
                 let td = td.write(Entry {
@@ -207,7 +207,8 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
         // SAFETY: Any data is not moved.
         unsafe {
             self.map_unchecked(|this| {
-                // SAFETY: the thread data entry is initialized in `self.assign`.
+                // SAFETY: the thread data entry is initialized in
+                // `self.assign`.
                 this.get_inner(bi).unwrap_unchecked()
             })
         }
@@ -236,7 +237,8 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
     ///
     /// Panics if the acquisition failed.
     pub fn assign(self: Pin<&Self>) -> Option<(Pin<&Heap<'arena, '_, B>>, u64)> {
-        // SAFETY: `id` is used to initialize its thread data entry below immediately.
+        // SAFETY: `id` is used to initialize its thread data entry below
+        // immediately.
         let id = unsafe { self.acquire_id() };
         let heap = match NonZeroU64::new(id) {
             // SAFETY: The id 0 is only assigned once to the main heap, and will never be recycled.
@@ -253,11 +255,13 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
             },
             Some(id) => {
                 let bi = BucketIndex::from_id(id);
-                // SAFETY: `id` is freshly allocated, which belongs to no other thread.
+                // SAFETY: `id` is freshly allocated, which belongs to no other
+                // thread.
                 //
-                // Note that while  freshly allocated, the value of `id` may be reclaimed from
-                // another dead thread, which means its thread data entry can be already
-                // initialized and should not be `insert`ed unconditionally.
+                // Note that while  freshly allocated, the value of `id` may be
+                // reclaimed from another dead thread, which means its thread
+                // data entry can be already initialized and should not be
+                // `insert`ed unconditionally.
                 unsafe {
                     let this = Pin::into_inner_unchecked(self);
                     let heap = this.get_inner(bi).or_else(move || this.insert(bi))?;
@@ -288,8 +292,8 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
                 }
             };
             let bi = BucketIndex::from_id(ret);
-            // SAFETY: Every reclaimed id corresponds to a previously owner thread alongside
-            // with its valid thread data entry.
+            // SAFETY: Every reclaimed id corresponds to a previously owner
+            // thread alongside with its valid thread data entry.
             let td = unsafe { self.entry(bi).unwrap_unchecked() };
             let next = td.next_reclaimed_id.load(Relaxed);
 
@@ -387,7 +391,8 @@ impl<'arena, B: BaseAlloc> ThreadLocal<'arena, B> {
 impl<B: BaseAlloc> Drop for ThreadLocal<'_, B> {
     fn drop(&mut self) {
         for (index, bucket_slot) in self.buckets.iter_mut().enumerate() {
-            // SAFETY: `drop` only during drops. Following the normal drop order.
+            // SAFETY: `drop` only during drops. Following the normal drop
+            // order.
             if !unsafe { Bucket::drop(bucket_slot, index) } {
                 break;
             }
@@ -545,8 +550,8 @@ unsafe impl<'t, 'arena: 't, B: BaseAlloc> Allocator for ThreadData<'t, 'arena, B
 impl<'t, 'arena: 't, B: BaseAlloc> Drop for ThreadData<'t, 'arena, B> {
     fn drop(&mut self) {
         if let Some(id) = self.id.take() {
-            // SAFETY: `id` is previously allocated from `thread_local`, and `heap` is not
-            // used any longer.
+            // SAFETY: `id` is previously allocated from `thread_local`, and
+            // `heap` is not used any longer.
             unsafe { self.thread_local.put(id) }
         }
     }

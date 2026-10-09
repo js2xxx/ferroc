@@ -109,7 +109,8 @@ impl Bitmap {
             let start_mask = !0 << start_bit;
             let end_mask = !(!0 << end_bit);
 
-            // Tries the CAS all the checked bits; goes out of this block if CAS fails.
+            // Tries the CAS all the checked bits; goes out of this block if CAS
+            // fails.
             let err_pos = 'trial: {
                 // CAS the starting bits.
                 cur = start_sto.load(Relaxed);
