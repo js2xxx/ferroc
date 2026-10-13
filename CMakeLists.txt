@@ -92,7 +92,7 @@ set(CMAKE_CARGO_MANIFEST ${CMAKE_BINARY_DIR}/Cargo.toml)
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock DESTINATION ${CMAKE_BINARY_DIR})
 file(READ ${CARGO_MANIFEST} CARGO_MANIFEST_CONTENT)
 string(REPLACE
-    "[workspace]\nexclude = [\"target\"]\nmembers = [\"fuzz\"]\nresolver = \"2\""
+    "[workspace]\nresolver = \"2\"\nmembers = [\"fuzz\"]\nexclude = [\"target\"]"
     "[lib]\ncrate-type=[\"cdylib\", \"staticlib\"]\npath=\"${CMAKE_CURRENT_SOURCE_DIR}/src/lib.rs\""
     CARGO_MANIFEST_CONTENT
     ${CARGO_MANIFEST_CONTENT}
@@ -115,20 +115,19 @@ set(HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/ferroc.h)
 message(STATUS "Building static library: ${STATIC_LIB}")
 message(STATUS "Building shared library: ${SHARED_LIB}")
 
+set(BUILD_FLAGS ${BUILD_FLAGS}
+    -Zbuild-std=core,std,panic_abort
+    -Zbuild-std-features=compiler-builtins-mem
+)
+
 set(RUSTFLAGS "-Ztls-model=initial-exec -Cpanic=abort")
+if(NOT FE_PGO_GATHER)
+    if(CMAKE_BUILD_TYPE MATCHES ".*Rel.*")
+        set(RUSTFLAGS "-Ztls-model=initial-exec -Zunstable-options -Cpanic=immediate-abort")
+    endif()
+endif()
 if(CMAKE_BUILD_TYPE MATCHES ".*Deb.*")
     set(RUSTFLAGS "${RUSTFLAGS} -g")
-endif()
-
-if(NOT FE_PGO_GATHER)
-    set(BUILD_STD_FEATURES compiler-builtins-mem)
-    if(CMAKE_BUILD_TYPE MATCHES ".*Rel.*")
-        set(BUILD_STD_FEATURES ${BUILD_STD_FEATURES},panic_immediate_abort)
-    endif()
-    set(BUILD_FLAGS ${BUILD_FLAGS}
-        -Zbuild-std=core,std,panic_abort
-        -Zbuild-std-features=${BUILD_STD_FEATURES}
-    )
 endif()
 
 set(SRC_PROFDATA)
