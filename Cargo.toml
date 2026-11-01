@@ -1,5 +1,4 @@
 [package]
-authors = ["Js2xxx <akucxy@163.com>"]
 build = "build.rs"
 categories = ["concurrency", "memory-management", "no-std"]
 description = "A fast & lock-free memory allocator library"
